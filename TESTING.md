@@ -1,4 +1,4 @@
-# Test Beam on your Quest 3S
+# Test Palmlight on your Quest 3S
 
 About 15 minutes. Do this at the end of each milestone.
 
@@ -22,16 +22,20 @@ The terminal prints a **Network** address such as `https://192.168.x.x:8081/`. T
 3. The browser shows a certificate warning, which is normal for a local test build. Choose Advanced, then continue.
 4. Press **Play in headset** and allow the passthrough and hand tracking prompts.
 
-## What to try (M1)
+## What to try (M2)
 
-1. The board should appear on your desk, about an arm's length away. If no desk is found, it stands on a dark pillar instead.
-2. A beam runs from the emitter on the left until it hits a dark blocker.
-3. Two mirrors sit on the tray to the right of the board. Pinch one to pick it up.
-4. While holding it, turn your hand like a dial. You hear a soft tick for each 45 degree step.
-5. Hover over a cell: a blue square shows where it will land, and the beam bends live.
-6. Let go to drop it. Goal: light the crystal at the far right.
+Eight levels play in a row. The dots on the far edge of the board show which one you are on, and a solved board moves to the next after a short pause.
 
-Hint: the beam needs to go up and over the blockers. Both mirrors point the same way.
+1. Open Hand: no pieces. Hold your open palm upright in the beam, facing back toward the emitter at an angle, and the light bounces off your hand to the far crystal.
+2. First Light: two mirrors. Point at a mirror (a blue ring shows under it) and pinch to pull it into your hand, or reach and pinch it. Turn your hand like a dial to rotate it, then let go over a cell.
+3. Hand Off: one mirror plus your palm.
+4. Fork: a splitter sends light two ways.
+5. Amber: the amber crystal only lights with amber light. Use the amber filter.
+6. Lift: tip your palm up toward the beam under the floating crystal, as if holding a tray.
+7. Periscope: one palm lifts the beam, the other hand, higher up, turns it flat into the crystal's ring. Two hands needed.
+8. Prism: mirror, splitter and cyan filter together.
+
+The light on your palm glows when the beam touches it. Your real hand should hide the beam where it passes in front of it.
 
 ## Tell me
 
@@ -39,3 +43,4 @@ Hint: the beam needs to go up and over the blockers. Both mirrors point the same
 - How pinching and turning felt, including any pieces that jumped or slipped.
 - How clear the beam looked against your room.
 - Any stutter or lag you noticed.
+- Whether the beam ever vanished near the desk surface (a side effect the hand-hiding effect can have).

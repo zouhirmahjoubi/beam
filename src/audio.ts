@@ -1,5 +1,5 @@
 /**
- * Small Web Audio synth. Every sound in Beam is generated here, so there are
+ * Small Web Audio synth. Every sound in Palmlight is generated here, so there are
  * no audio files to license or download.
  */
 
@@ -59,4 +59,10 @@ export function playSolved() {
     voice(f, i * 0.09, 2.2, 0.16, 'sine');
     voice(f * 1.5, i * 0.09 + 0.02, 1.2, 0.03, 'triangle');
   });
+}
+
+/** Shimmer when the beam first lands on a palm. */
+export function playPalm() {
+  voice(1567.98, 0, 0.5, 0.07, 'sine');
+  voice(2093, 0.03, 0.4, 0.04, 'sine');
 }

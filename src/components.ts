@@ -6,6 +6,6 @@
  */
 
 import { defineComponents } from '@iwsdk/core';
-import { MirrorPiece } from './beam-components.js';
+import { BoardPiece } from './beam-components.js';
 
-export default defineComponents([MirrorPiece]);
+export default defineComponents([BoardPiece]);
