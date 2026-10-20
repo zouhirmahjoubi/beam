@@ -86,7 +86,15 @@ function facingNormal(line: number, dir: number): [number, number] {
   return [nx, nz];
 }
 
-export function solve(level: Level, maxPalms = level.palm || level.sky?.length ? 2 : 0): Solution | null {
+/**
+ * `gridPalmOk` can veto a palm pose on the board, for example one that would
+ * make the player face their palm toward the headset.
+ */
+export function solve(
+  level: Level,
+  maxPalms = level.palm || level.sky?.length ? 2 : 0,
+  gridPalmOk: (palm: PalmCell) => boolean = () => true,
+): Solution | null {
   const hasSky = (level.sky?.length ?? 0) > 0;
   const pieces: Piece[] = [];
   const palms: PalmCell[] = [];
@@ -144,7 +152,9 @@ export function solve(level: Level, maxPalms = level.palm || level.sky?.length ?
           } else {
             for (const line of [0, 1, 2, 3]) {
               const [nx, nz] = facingNormal(line, dir);
-              palms.push({ col: cell.col, row: cell.row, nx, nz, lift: false });
+              const palm: PalmCell = { col: cell.col, row: cell.row, nx, nz, lift: false };
+              if (!gridPalmOk(palm)) continue;
+              palms.push(palm);
               if (search()) return true;
               palms.pop();
             }

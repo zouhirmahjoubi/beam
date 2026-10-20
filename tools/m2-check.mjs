@@ -83,15 +83,15 @@ palmTo('hand-right', cell(3, 3), [r2, 0, r2]);
 sleep(0.6);
 report('open-hand, back of hand:');
 
-// 3. Lift: palm at (4,3) tipped up toward the beam, under the floating crystal.
+// 3. Lift: the beam runs toward you; palm at (3,3) tipped up and away, like a tray.
 load(5);
-palmTo('hand-right', cell(4, 3), [-r2, r2, 0]);
+palmTo('hand-right', cell(3, 3), [0, r2, -r2]);
 sleep(1.2);
 report('lift, palm tipped up:');
 
 // 4. Periscope: right palm lifts at (3,4), left palm turns it away from you at crystal height.
 load(6);
-palmTo('hand-right', cell(3, 4), [-r2, r2, 0]);
+palmTo('hand-right', cell(3, 4), [0, r2, -r2]);
 sleep(0.4);
 report('periscope, one hand:');
 palmTo('hand-left', cell(3, 4, 0.212), [0, -r2, -r2]);

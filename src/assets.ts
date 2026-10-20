@@ -15,4 +15,19 @@ export default defineAssets({
     type: AssetType.UIKitML,
     name: 'Welcome Panel',
   },
+  'board-controls': {
+    url: publicAssetUrl('ui/controls.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Board Controls',
+  },
+  'pause-panel': {
+    url: publicAssetUrl('ui/pause.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Pause Panel',
+  },
+  'fps-panel': {
+    url: publicAssetUrl('ui/fps.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Frame Time Readout',
+  },
 });

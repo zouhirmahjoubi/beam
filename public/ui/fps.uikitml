@@ -1,0 +1,23 @@
+<!--
+  Frame time readout for playtesters. Hidden unless the page URL has ?fps=1.
+-->
+<style>
+  .chip {
+    flex-direction: row;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 10px;
+    background-color: #101418;
+  }
+
+  .text {
+    font-size: 18px;
+    font-weight: 500;
+    color: #f2f5f8;
+  }
+</style>
+<div class="chip">
+  <span id="fps-text" class="text">Measuring frame time</span>
+</div>

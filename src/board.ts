@@ -3,9 +3,15 @@ import {
   DepthOccludable,
   DistanceGrabbable,
   Grabbed,
+  GrabSystem,
   Group,
   Hovered,
+  Mesh,
+  MeshBasicMaterial,
+  BoxGeometry,
   MovementMode,
+  PokeInteractable,
+  Pressed,
   Quaternion,
   RayInteractable,
   setWorldPosition,
@@ -14,13 +20,14 @@ import {
   VisibilityState,
   XRPlane,
   type Entity,
-  type Mesh,
+  type UIKitMLAsset,
   type Object3D,
 } from '@iwsdk/core';
 import { playLit, playPalm, playSnap, playSolved, playTurn } from './audio.js';
-import { BoardPiece } from './beam-components.js';
+import { BoardButton, BoardPiece } from './beam-components.js';
 import {
   BEAM_Y,
+  BOARD_SIZE,
   BOARD_TOP,
   beamMats,
   buildBase,
@@ -45,9 +52,11 @@ import {
 } from './game/grid.js';
 import { LEVELS } from './game/levels.js';
 import { apertureVector, freeTrace, reflect3, type FreeResult, type PalmDisc, type SkyTarget, type V3 } from './game/optics.js';
-import { PALM_RADIUS, PalmReader, type HandSource } from './palms.js';
+import { PALM_RADIUS, PalmReader, palmFacesHead, type HandSource } from './palms.js';
 
 const STEP = Math.PI / 4;
+/** Board width in meters, without the rim. */
+const BOARD_SIZE_M = BOARD_SIZE * CELL;
 /** How far in front of the eyes the board sits, measured flat. */
 const REACH = 0.45;
 /** Board height below the eyes when no desk is found (seated). */
@@ -60,6 +69,28 @@ const SOLVE_HOLD = 0.4;
 const NEXT_LEVEL_DELAY = 2.6;
 /** A palm tilted up past this counts as lifting the beam off the board. */
 const LIFT_TILT = 0.35;
+/** The button bar tilts back so it faces a seated player's eyes. */
+const CONTROLS_TILT = -Math.PI * 0.32;
+/** Hit area for one board button, in meters; resized from the button layout. */
+const BUTTON_HIT_GEOMETRY = new BoxGeometry(1, 1, 1);
+const BUTTON_IDS = ['restart-button', 'next-button', 'hand-button'];
+/** Invisible until hovered, but still hit by rays and fingertips. */
+const BUTTON_HIT_MATERIAL = new MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0, depthWrite: false });
+/** Palm glow fades in over 0.1 s, out over 0.15 s, and holds 0.15 s after the beam leaves. */
+const GLOW_IN = 0.1;
+const GLOW_OUT = 0.15;
+const GLOW_HOLD = 0.15;
+const GLOW_OPACITY = 0.55;
+/**
+ * The Quest reserves a pinch made with the palm toward the headset (on the
+ * left hand it leaves the session), so a grab in that pose is let go.
+ */
+const PALM_TO_HEAD_LIMIT = 0.5;
+/** Frame time readout: a 72 fps frame budget, sampled over about 3 seconds. */
+const FRAME_BUDGET_MS = 13.9;
+const FRAME_SAMPLES = 216;
+/** How far in front of the eyes the pause card floats. */
+const PAUSE_DISTANCE = 0.7;
 
 interface NativePlane {
   orientation?: string;
@@ -75,6 +106,8 @@ export class BoardSystem extends createSystem({
   pieces: { required: [BoardPiece] },
   held: { required: [BoardPiece, Grabbed] },
   hovered: { required: [BoardPiece, Hovered], excluded: [Grabbed] },
+  buttonsPressed: { required: [BoardButton, Pressed] },
+  buttonsHovered: { required: [BoardButton, Hovered] },
   planes: { required: [XRPlane] },
 }) {
   private base!: BaseView;
@@ -115,6 +148,31 @@ export class BoardSystem extends createSystem({
   private solvedAt = -10;
   private nextLevelAt = -1;
 
+  private traySide = 1;
+  private glowLevel = [0, 0];
+  private lastPalmTouch = [-10, -10];
+  private guardMask = 0;
+  private headLocal = new Vector3();
+  private fpsOn = false;
+  private fpsCard: Entity | undefined;
+  private fpsText: { setProperties(p: { text: string }): void } | undefined;
+  private frameMs = new Float32Array(FRAME_SAMPLES);
+  private frameIndex = 0;
+  private frameCount = 0;
+  private fpsTimer = 0;
+  /** Last readout text, kept for test scripts. */
+  fpsLabel = '';
+  private paused = false;
+  private controls: Entity | undefined;
+  private pauseCard: Entity | undefined;
+  private handLabel: { setProperties(p: { text: string }): void } | undefined;
+  private tilt = new Quaternion();
+  private buttonHits: Entity[] = [];
+  private buttonEls: Array<{ getWorldPosition(v: Vector3): Vector3 } | undefined> = [];
+  private hitsPlaced = false;
+  private c = new Vector3();
+  private xAxis = new Vector3(1, 0, 0);
+
   private placeUntil = 0;
   private nextPlaceAt = 0;
   private placeRequested = true;
@@ -139,8 +197,9 @@ export class BoardSystem extends createSystem({
     for (let i = 0; i < this.base.beamCore.length; i++) beams.add(this.base.beamCore[i], this.base.beamGlow[i]);
     this.world.createTransformEntity(beams, board).addComponent(DepthOccludable);
 
-    this.queries.held.subscribe('qualify', () => {
+    this.queries.held.subscribe('qualify', (entity) => {
       this.touched = true;
+      this.guardPalmPinch(entity);
     });
     this.queries.held.subscribe('disqualify', (entity) => {
       this.pendingSnap |= 1 << this.indexOf(entity);
@@ -156,6 +215,215 @@ export class BoardSystem extends createSystem({
       }),
     );
     this.loadLevel(0);
+    this.wirePanels();
+  }
+
+  /**
+   * Hook up the button bar and hide the pause card. Each button gets its own
+   * hit area entity, so a fingertip press (poke) and a point or look plus
+   * pinch (ray) both arrive as the same Pressed tag.
+   */
+  private wirePanels(): void {
+    this.controls = this.world.getSceneEntity('board-controls');
+    this.pauseCard = this.world.getSceneEntity('pause-panel');
+    if (this.pauseCard?.object3D) this.pauseCard.object3D.visible = false;
+    this.fpsCard = this.world.getSceneEntity('fps-panel');
+    const fps = this.world.getSceneObject<UIKitMLAsset>('fps-panel');
+    this.fpsText = fps?.getElementById('fps-text') as typeof this.fpsText;
+    this.setFrameTimeReadout(new URLSearchParams(window.location.search).get('fps') === '1');
+    this.cleanupFuncs.push(() => this.setFrameTimeReadout(false));
+    const panel = this.world.getSceneObject<UIKitMLAsset>('board-controls');
+    this.handLabel = panel?.getElementById('hand-label') as typeof this.handLabel;
+    if (!this.controls || !panel) return;
+
+    // Each button gets its own hit area entity in world space. They are
+    // placed once the panel has been laid out (see placeButtonHits).
+    this.buttonEls = BUTTON_IDS.map((id) => panel.getElementById(id) ?? undefined);
+    this.buttonHits = BUTTON_IDS.map((_, action) => {
+      const hit = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
+      const entity = this.world.createTransformEntity(hit);
+      entity.addComponent(BoardButton, { action });
+      entity.addComponent(RayInteractable);
+      entity.addComponent(PokeInteractable);
+      return entity;
+    });
+
+    const setOpacity = (entity: Entity, opacity: number) => {
+      const m = (entity.object3D as Mesh | undefined)?.material as MeshBasicMaterial | undefined;
+      if (m) m.opacity = opacity;
+    };
+    this.cleanupFuncs.push(
+      this.queries.buttonsPressed.subscribe('qualify', (entity) => {
+        if (this.paused) return;
+        const action = entity.getValue(BoardButton, 'action');
+        if (action === 0) this.restartLevel();
+        else if (action === 1) this.nextLevel();
+        else this.toggleTraySide();
+        playSnap();
+      }),
+      this.queries.buttonsHovered.subscribe('qualify', (entity) => setOpacity(entity, 0.14)),
+      this.queries.buttonsHovered.subscribe('disqualify', (entity) => setOpacity(entity, 0)),
+    );
+  }
+
+  /**
+   * Put each button's hit area over the laid-out button, on the panel's plane.
+   * Returns false while the panel has not been laid out yet (the buttons still
+   * share one position), so the caller can try again next frame.
+   */
+  private placeButtonHits(): boolean {
+    const panel = this.controls?.object3D;
+    if (!panel || this.buttonHits.length === 0 || this.buttonEls.some((el) => !el)) return false;
+    panel.updateWorldMatrix(true, true);
+    const first = this.buttonEls[0]!.getWorldPosition(this.a).clone();
+    const last = this.buttonEls[this.buttonEls.length - 1]!.getWorldPosition(this.b);
+    const span = first.distanceTo(last);
+    if (span < 0.01) return false;
+    const pitch = span / (this.buttonEls.length - 1);
+    panel.getWorldQuaternion(this.q);
+    this.c.set(0, 0, 1).applyQuaternion(this.q);
+    this.buttonHits.forEach((entity, i) => {
+      const hit = entity.object3D;
+      if (!hit) return;
+      this.buttonEls[i]!.getWorldPosition(this.tmp).addScaledVector(this.c, 0.004);
+      setWorldPosition(hit, this.tmp);
+      setWorldQuaternion(hit, this.q);
+      hit.scale.set(pitch * 0.92, 0.046, 0.01);
+    });
+    return true;
+  }
+
+  /** Let go of a grab made with the palm facing the headset (a reserved system pinch). */
+  private guardPalmPinch(entity: Entity): void {
+    if (!this.immersive) return;
+    const grab = this.world.getSystem(GrabSystem);
+    const hand = grab?.getHolderHand(entity);
+    if (!grab || !hand) return;
+    const palm = this.hands.palms[hand === 'left' ? 0 : 1];
+    if (!palm.tracked) return;
+    this.player.head.getWorldPosition(this.headLocal);
+    this.base.root.worldToLocal(this.headLocal);
+    if (palmFacesHead(palm.center, palm.normal, this.headLocal, PALM_TO_HEAD_LIMIT)) {
+      this.guardMask |= 1 << this.indexOf(entity);
+      grab.forceRelease(entity);
+    }
+  }
+
+  /**
+   * Hidden frame time readout for playtesters, turned on with ?fps=1. The
+   * text is rebuilt on a half-second timer, so update() never allocates.
+   */
+  setFrameTimeReadout(on: boolean): void {
+    this.fpsOn = on;
+    window.clearInterval(this.fpsTimer);
+    this.fpsTimer = on ? window.setInterval(() => this.publishFrameTime(), 500) : 0;
+    if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = on && !this.paused;
+  }
+
+  /** Record one frame's time in the ring buffer. */
+  private updateFrameTime(delta: number): void {
+    if (!this.fpsOn) return;
+    this.frameMs[this.frameIndex] = delta * 1000;
+    this.frameIndex = (this.frameIndex + 1) % FRAME_SAMPLES;
+    if (this.frameCount < FRAME_SAMPLES) this.frameCount++;
+  }
+
+  private publishFrameTime(): void {
+    let sum = 0;
+    let slow = 0;
+    for (let i = 0; i < this.frameCount; i++) {
+      sum += this.frameMs[i];
+      if (this.frameMs[i] > FRAME_BUDGET_MS) slow++;
+    }
+    const avg = sum / Math.max(1, this.frameCount);
+    const pct = (100 * slow) / Math.max(1, this.frameCount);
+    this.fpsLabel = `${avg.toFixed(1)} ms a frame, ${pct.toFixed(1)}% over budget`;
+    this.fpsText?.setProperties({ text: this.fpsLabel });
+  }
+
+  restartLevel(): void {
+    this.loadLevel(this.levelIndex);
+    this.seatPieces();
+  }
+
+  nextLevel(): void {
+    this.loadLevel(this.levelIndex + 1);
+    this.seatPieces();
+  }
+
+  /** Move the tray to the other side of the board, for left-handed play. */
+  toggleTraySide(): void {
+    this.traySide = -this.traySide;
+    this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
+    this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
+    this.seatPieces();
+  }
+
+  /** Place the button bar on the board's front edge, tilted toward the player. */
+  private seatControls(): void {
+    const object = this.controls?.object3D;
+    if (!object) return;
+    const root = this.base.root;
+    this.tmp.set(0, 0.03, (BOARD_SIZE_M / 2) + 0.07);
+    root.localToWorld(this.tmp);
+    setWorldPosition(object, this.tmp);
+    this.q.setFromAxisAngle(this.up, root.rotation.y);
+    this.tilt.setFromAxisAngle(this.xAxis, CONTROLS_TILT);
+    this.q.multiply(this.tilt);
+    setWorldQuaternion(object, this.q);
+    this.hitsPlaced = this.placeButtonHits();
+    const fps = this.fpsCard?.object3D;
+    if (fps) {
+      // Just above the button bar, on the same tilted plane.
+      this.a.set(0, 0.055, 0).applyQuaternion(this.q).add(this.tmp);
+      setWorldPosition(fps, this.a);
+      setWorldQuaternion(fps, this.q);
+    }
+  }
+
+  /** Let go of every held piece; the release keeps each piece where it was. */
+  private releaseHeld(): void {
+    if (this.queries.held.entities.size === 0) return;
+    const grab = this.world.getSystem(GrabSystem);
+    for (const entity of [...this.queries.held.entities]) {
+      this.guardMask |= 1 << this.indexOf(entity);
+      grab?.forceRelease(entity);
+    }
+  }
+
+  /** Hands only: any active controller pauses play until both are put down. */
+  private updatePause(): void {
+    const adapters = (this.input.xr as unknown as {
+      visualAdapters: { controller: { left: { connected: boolean }; right: { connected: boolean } } };
+    }).visualAdapters.controller;
+    const controllerActive = this.immersive && (adapters.left.connected || adapters.right.connected);
+    if (controllerActive === this.paused) return;
+    this.paused = controllerActive;
+    const card = this.pauseCard?.object3D;
+    if (this.paused) {
+      this.releaseHeld();
+      // Clear feedback that would otherwise freeze on screen during the pause.
+      this.base.hoverRing.visible = this.base.ghost.visible = false;
+      for (const glow of this.base.palmGlows) glow.visible = false;
+      this.glowLevel[0] = this.glowLevel[1] = 0;
+      if (card) {
+        this.player.head.getWorldPosition(this.head);
+        this.player.head.getWorldQuaternion(this.q);
+        this.fwd.set(0, 0, -1).applyQuaternion(this.q);
+        this.fwd.y = 0;
+        if (this.fwd.lengthSq() < 1e-4) this.fwd.set(0, 0, -1);
+        this.fwd.normalize();
+        this.tmp.copy(this.head).addScaledVector(this.fwd, PAUSE_DISTANCE);
+        this.tmp.y -= 0.08;
+        setWorldPosition(card, this.tmp);
+        this.q.setFromAxisAngle(this.up, Math.atan2(-this.fwd.x, -this.fwd.z));
+        setWorldQuaternion(card, this.q);
+      }
+    }
+    if (card) card.visible = this.paused;
+    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused;
+    if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
+    for (const hit of this.buttonHits) if (hit.object3D) hit.object3D.visible = !this.paused;
   }
 
   /** Swap the fixed pieces and tray for level `index`. */
@@ -163,6 +431,7 @@ export class BoardSystem extends createSystem({
     this.levelIndex = ((index % LEVELS.length) + LEVELS.length) % LEVELS.length;
     const level = (this.level = LEVELS[this.levelIndex]);
 
+    this.releaseHeld();
     for (const entity of [...this.queries.pieces.entities]) {
       entity.object3D?.removeFromParent();
       entity.destroy();
@@ -193,6 +462,7 @@ export class BoardSystem extends createSystem({
     this.pieceSig = new Int32Array(level.tray.length).fill(-2);
     this.palmSig.fill(-2);
     this.pendingSnap = 0;
+    this.guardMask = 0;
     this.litMask = this.skyMask = 0;
     this.solved = false;
     this.solvedSince = this.nextLevelAt = -1;
@@ -223,6 +493,7 @@ export class BoardSystem extends createSystem({
   }
 
   update(delta: number, time: number): void {
+    this.updateFrameTime(delta);
     if (this.placeRequested) {
       this.placeRequested = false;
       this.placeUntil = time + PLACEMENT_WINDOW;
@@ -235,6 +506,13 @@ export class BoardSystem extends createSystem({
     }
 
     this.hands.update(this.input.xr as unknown as HandSource, this.player.gripSpaces, this.base.root);
+    if (!this.hitsPlaced) this.hitsPlaced = this.placeButtonHits();
+    this.updatePause();
+    if (this.paused) {
+      this.releaseHeld();
+      return;
+    }
+
     for (const entity of this.queries.held.entities) this.readCandidate(entity);
     if (this.pendingSnap !== 0) this.snapReleased();
 
@@ -296,6 +574,7 @@ export class BoardSystem extends createSystem({
       this.world.camera.lookAt(this.tmp);
     }
     this.seatPieces();
+    this.seatControls();
   }
 
   private seatPieces(): void {
@@ -311,7 +590,7 @@ export class BoardSystem extends createSystem({
     const root = this.base.root;
     root.updateMatrixWorld(true);
     if (m) cellToLocal(this.level.size, m.col, m.row, this.tmp);
-    else traySlot(this.level.size, i, this.tmp);
+    else traySlot(this.level.size, i, this.tmp, this.traySide);
     root.localToWorld(this.tmp);
     setWorldPosition(object, this.tmp);
     this.q.setFromAxisAngle(this.up, root.rotation.y + (m ? m.angle * STEP : 0));
@@ -357,7 +636,10 @@ export class BoardSystem extends createSystem({
     for (const entity of this.queries.pieces.entities) {
       const i = this.indexOf(entity);
       if ((this.pendingSnap & (1 << i)) === 0) continue;
-      if (this.candidateOk[i]) {
+      if (this.guardMask & (1 << i)) {
+        // A system-gesture pinch is not a move: the piece stays where it was.
+        this.guardMask &= ~(1 << i);
+      } else if (this.candidateOk[i]) {
         const c = this.candidate[i];
         this.placed[i] = { kind: c.kind, col: c.col, row: c.row, angle: c.angle, color: c.color };
         playSnap();
@@ -490,6 +772,8 @@ export class BoardSystem extends createSystem({
     if ((touch0 && !this.palmTouch[0]) || (touch1 && !this.palmTouch[1])) playPalm();
     this.palmTouch[0] = touch0;
     this.palmTouch[1] = touch1;
+    if (touch0) this.lastPalmTouch[0] = time;
+    if (touch1) this.lastPalmTouch[1] = time;
 
     if (!this.solved) {
       this.litMask = lit;
@@ -572,12 +856,17 @@ export class BoardSystem extends createSystem({
       });
     }
 
-    // Light on the palm, so a hit is visible without haptics.
+    // Light on the palm, so a hit is visible without haptics. It fades rather
+    // than flashing, and holds briefly so the beam's edge cannot make it flicker.
     for (let h = 0; h < 2; h++) {
       const glow = this.base.palmGlows[h];
       const palm = this.hands.palms[h];
-      glow.visible = palm.tracked && this.palmTouch[h];
+      const lit = palm.tracked && time - this.lastPalmTouch[h] <= GLOW_HOLD;
+      const level = Math.min(1, Math.max(0, this.glowLevel[h] + (lit ? delta / GLOW_IN : -delta / GLOW_OUT)));
+      this.glowLevel[h] = level;
+      glow.visible = level > 0 && palm.tracked;
       if (!glow.visible) continue;
+      (glow.material as MeshBasicMaterial).opacity = GLOW_OPACITY * level;
       glow.position.copy(palm.center).addScaledVector(palm.normal, 0.012);
       glow.quaternion.setFromUnitVectors(this.zAxis, palm.normal);
       glow.scale.setScalar(1 + 0.12 * Math.sin(time * 9));

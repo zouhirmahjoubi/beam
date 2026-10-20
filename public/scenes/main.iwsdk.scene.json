@@ -50,6 +50,72 @@
           "height": "40%"
         }
       }
+    },
+    {
+      "id": "board-controls",
+      "name": "Board Controls",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "board-controls"
+      },
+      "transform": {
+        "position": [
+          0,
+          0.6,
+          0.3
+        ],
+        "scale": 0.1
+      },
+      "components": {}
+    },
+    {
+      "id": "pause-panel",
+      "name": "Pause Panel",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "pause-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.12
+      },
+      "components": {}
+    },
+    {
+      "id": "fps-panel",
+      "name": "Frame Time Readout",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "fps-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.1
+      },
+      "components": {}
     }
   ]
 }

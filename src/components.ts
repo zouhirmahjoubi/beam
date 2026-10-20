@@ -6,6 +6,6 @@
  */
 
 import { defineComponents } from '@iwsdk/core';
-import { BoardPiece } from './beam-components.js';
+import { BoardButton, BoardPiece } from './beam-components.js';
 
-export default defineComponents([BoardPiece]);
+export default defineComponents([BoardPiece, BoardButton]);

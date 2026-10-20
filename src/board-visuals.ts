@@ -133,6 +133,7 @@ export interface BaseView {
   dots: Mesh[];
   /** Ring under the piece a hand ray or the eyes point at. */
   hoverRing: Mesh;
+  trayPad: Mesh;
 }
 
 export interface LevelView {
@@ -148,9 +149,9 @@ export function cellToLocal(size: number, col: number, row: number, out: Vector3
   return out.set((col - (size - 1) / 2) * CELL, BOARD_TOP, (row - (size - 1) / 2) * CELL);
 }
 
-/** Local position of tray slot `i`, to the right of the board. */
-export function traySlot(size: number, i: number, out: Vector3): Vector3 {
-  const x = (size * CELL) / 2 + RIM + 0.05;
+/** Local position of tray slot `i`, beside the board on `side` (1 right, -1 left). */
+export function traySlot(size: number, i: number, out: Vector3, side = 1): Vector3 {
+  const x = side * ((size * CELL) / 2 + RIM + 0.05);
   const z = (i - (TRAY_SLOTS - 1) / 2) * 0.075;
   return out.set(x, BOARD_TOP, z);
 }
@@ -223,7 +224,8 @@ export function buildBase(levelCount: number): BaseView {
   root.add(ghost);
 
   const palmGlows = [0, 1].map(() => {
-    const g = new Mesh(geo.palmGlow, mat.palmGlow);
+    // Each hand fades its own glow, so each needs its own material.
+    const g = new Mesh(geo.palmGlow, mat.palmGlow.clone());
     g.visible = false;
     g.renderOrder = 3;
     root.add(g);
@@ -242,7 +244,7 @@ export function buildBase(levelCount: number): BaseView {
   stand.visible = false;
   root.add(stand);
 
-  return { root, beamCore, beamGlow, ghost, stand, rimMat, palmGlows, dots, hoverRing };
+  return { root, beamCore, beamGlow, ghost, stand, rimMat, palmGlows, dots, hoverRing, trayPad: pad };
 }
 
 function crystalMaterial(color: Color): MeshStandardMaterial {

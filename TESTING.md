@@ -1,11 +1,11 @@
-# Test Palmlight on your Quest 3S
+# Test Palmlight on a Quest
 
-About 15 minutes. Do this at the end of each milestone.
+For anyone with a Quest 3 or 3S who can try a build (Zouhir develops in the emulator only). About 15 minutes.
 
 ## Before the first test
 
 1. On the headset, finish Space Setup (Settings, Environment setup, Space setup) and include your desk. This lets the game find the desk.
-2. Put the headset and this laptop on the same Wi-Fi network.
+2. For a local build, put the headset and the laptop running it on the same Wi-Fi network. For a hosted build, just open its link.
 
 ## Start the game on the laptop
 
@@ -31,9 +31,13 @@ Eight levels play in a row. The dots on the far edge of the board show which one
 3. Hand Off: one mirror plus your palm.
 4. Fork: a splitter sends light two ways.
 5. Amber: the amber crystal only lights with amber light. Use the amber filter.
-6. Lift: tip your palm up toward the beam under the floating crystal, as if holding a tray.
-7. Periscope: one palm lifts the beam, the other hand, higher up, turns it flat into the crystal's ring. Two hands needed.
+6. Lift: the beam runs toward you. Tip your palm up and slightly away under the floating crystal, as if holding a tray.
+7. Periscope: the beam runs toward you. One palm lifts it, the other hand, higher up, turns it away from you and flat into the crystal's ring. Two hands needed.
 8. Prism: mirror, splitter and cyan filter together.
+
+The buttons on the front edge of the board (Restart, Next, tray side) work with a fingertip press or by pointing and pinching. Picking up a controller pauses the game until you put it down.
+
+To report speed, add ?fps=1 to the link: a small readout above the buttons shows the time per frame and the share of slow frames.
 
 The light on your palm glows when the beam touches it. Your real hand should hide the beam where it passes in front of it.
 
@@ -44,3 +48,5 @@ The light on your palm glows when the beam touches it. Your real hand should hid
 - How clear the beam looked against your room.
 - Any stutter or lag you noticed.
 - Whether the beam ever vanished near the desk surface (a side effect the hand-hiding effect can have).
+- If the headset's menu icon appeared on your palm during Lift or Periscope, or the game closed by itself.
+- Any moment in Periscope when a hand stopped tracking because one hand was in front of the other.

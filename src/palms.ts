@@ -71,3 +71,20 @@ export class PalmReader {
     out.tracked = true;
   }
 }
+
+/**
+ * True when a palm points at the head closely enough that a pinch would be
+ * the Quest's reserved system gesture. `limit` is the cosine of the angle.
+ */
+export function palmFacesHead(
+  center: { x: number; y: number; z: number },
+  normal: { x: number; y: number; z: number },
+  head: { x: number; y: number; z: number },
+  limit = 0.5,
+): boolean {
+  const dx = head.x - center.x;
+  const dy = head.y - center.y;
+  const dz = head.z - center.z;
+  const l = Math.hypot(dx, dy, dz) || 1;
+  return (normal.x * dx + normal.y * dy + normal.z * dz) / l > limit;
+}

@@ -1,0 +1,39 @@
+<!--
+  Board controls: sits on the front edge of the board, tilted toward the
+  player. Every button works by fingertip press (poke) or point/look and pinch.
+-->
+<style>
+  .bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .button-label {
+    transform-translate-y: 1px;
+  }
+</style>
+<Panel class="bar">
+  <Button id="restart-button">
+    <ButtonIcon>
+      <RotateCcw></RotateCcw>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Restart</ButtonLabel>
+  </Button>
+  <Button id="next-button">
+    <ButtonIcon>
+      <SkipForward></SkipForward>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Next</ButtonLabel>
+  </Button>
+  <Button id="hand-button">
+    <ButtonIcon>
+      <Hand></Hand>
+    </ButtonIcon>
+    <ButtonLabel id="hand-label" class="button-label">Tray left</ButtonLabel>
+  </Button>
+</Panel>

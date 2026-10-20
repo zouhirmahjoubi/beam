@@ -75,33 +75,34 @@ export const AMBER: Level = {
   tray: [{ kind: 'splitter' }, { kind: 'filter', color: 2 }],
 };
 
-/** Tip your palm up under the floating crystal at (4,3). */
+/**
+ * The beam runs toward you; tip your palm up and away under the floating
+ * crystal at (3,3), like holding a tray, and it rises into the crystal.
+ */
 export const LIFT: Level = {
   id: 'lift',
   name: 'Lift',
   size: 6,
-  emitter: { col: 0, row: 3, dir: 0 },
+  emitter: { col: 3, row: 0, dir: 6 },
   crystals: [],
-  blockers: [{ col: 5, row: 3 }],
+  blockers: [{ col: 3, row: 5 }],
   tray: [],
-  sky: [{ col: 4, row: 3, height: 0.18, color: 0, aperture: 'down' }],
+  sky: [{ col: 3, row: 3, height: 0.18, color: 0, aperture: 'down' }],
   palm: true,
 };
 
 /**
- * Periscope: one palm lifts the beam at (3,4), the other turns it away from
- * you, flat into the crystal hanging over (3,1), whose opening faces you.
+ * Periscope: the beam runs toward you. One palm lifts it at (3,4); the other,
+ * higher up, turns it away from you, flat into the crystal hanging over (3,1),
+ * whose opening faces you.
  */
 export const PERISCOPE: Level = {
   id: 'periscope',
   name: 'Periscope',
   size: 6,
-  emitter: { col: 0, row: 4, dir: 0 },
+  emitter: { col: 3, row: 0, dir: 6 },
   crystals: [],
-  blockers: [
-    { col: 3, row: 2 },
-    { col: 5, row: 4 },
-  ],
+  blockers: [{ col: 3, row: 5 }],
   tray: [],
   sky: [{ col: 3, row: 1, height: 0.2, color: 0, aperture: 6 }],
   palm: true,
