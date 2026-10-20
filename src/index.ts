@@ -8,6 +8,7 @@
 import { DepthSensingSystem, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { BoardSystem } from './board.js';
+import { solve } from './game/solver.js';
 import { PanelSystem } from './panel.js';
 
 World.create(
@@ -24,6 +25,7 @@ World.create(
     (window as unknown as { __palmlight: unknown }).__palmlight = {
       world,
       board: world.getSystem(BoardSystem),
+      solve,
     };
   }
 });

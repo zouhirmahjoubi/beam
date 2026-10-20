@@ -56,19 +56,38 @@ export function cellPoint(size: number, col: number, row: number, y = BEAM_Y): V
   return [(col - (size - 1) / 2) * CELL, y, (row - (size - 1) / 2) * CELL];
 }
 
-function skyReachable(level: Level, lifts: Cell[], palmsLeft: number): boolean {
+function skyReachable(
+  level: Level,
+  lifts: Array<Cell & { dir: number }>,
+  palmsLeft: number,
+  poseOk: PoseCheck,
+): boolean {
   const sky = level.sky ?? [];
+  const cone = Math.cos(APERTURE_HALF_ANGLE);
   return sky.every((s) => {
     const target = cellPoint(level.size, s.col, s.row, s.height);
+    const opening = apertureVector(s.aperture);
+    const into = (from: V3) => {
+      const d = unit([target[0] - from[0], target[1] - from[1], target[2] - from[2]]);
+      return { d, ok: -(d[0] * opening[0] + d[1] * opening[1] + d[2] * opening[2]) >= cone };
+    };
     return lifts.some((lift) => {
-      if (palmsLeft >= 1) return true; // a second palm can turn it into the opening
       const from = cellPoint(level.size, lift.col, lift.row);
-      const d: V3 = [target[0] - from[0], target[1] - from[1], target[2] - from[2]];
-      if (d[1] <= 0) return false;
-      const l = Math.hypot(...d);
-      const a = apertureVector(s.aperture);
-      const cos = -(d[0] * a[0] + d[1] * a[1] + d[2] * a[2]) / l;
-      return cos >= Math.cos(APERTURE_HALF_ANGLE);
+      const [dx, dz] = DIRS[lift.dir];
+      const beam = unit([dx, 0, dz]);
+      // One palm: tip it so the beam goes straight into the opening.
+      const direct = into(from);
+      if (direct.ok && direct.d[1] > 0) {
+        const n = unit([direct.d[0] - beam[0], direct.d[1] - beam[1], direct.d[2] - beam[2]]);
+        if (poseOk(from, n)) return true;
+      }
+      // Two palms: lift straight up, then turn it flat into the opening.
+      if (palmsLeft < 1) return false;
+      const liftNormal = unit([-beam[0], 1, -beam[2]]);
+      const upper: V3 = [from[0], target[1], from[2]];
+      const turn = into(upper);
+      if (!turn.ok || !poseOk(from, liftNormal)) return false;
+      return poseOk(upper, unit([turn.d[0], turn.d[1] - 1, turn.d[2]]));
     });
   });
 }
@@ -86,14 +105,23 @@ function facingNormal(line: number, dir: number): [number, number] {
   return [nx, nz];
 }
 
+/** A palm at `at` (board-local meters) facing `normal` is allowed. */
+export type PoseCheck = (at: V3, normal: V3) => boolean;
+
+const unit = (v: V3): V3 => {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+};
+
 /**
- * `gridPalmOk` can veto a palm pose on the board, for example one that would
- * make the player face their palm toward the headset.
+ * `poseOk` can veto palm poses, for example ones that would make the player
+ * face a palm toward the headset. It sees every palm the answer needs: palms
+ * on the board, palms lifting the beam and the upper palm of a periscope.
  */
 export function solve(
   level: Level,
-  maxPalms = level.palm || level.sky?.length ? 2 : 0,
-  gridPalmOk: (palm: PalmCell) => boolean = () => true,
+  maxPalms = level.hands ?? (level.palm || level.sky?.length ? 2 : 0),
+  poseOk: PoseCheck = () => true,
 ): Solution | null {
   const hasSky = (level.sky?.length ?? 0) > 0;
   const pieces: Piece[] = [];
@@ -104,7 +132,7 @@ export function solve(
     const result = trace(level, pieces, palms);
     const lifts = result.beams.filter((b) => b.lift).map((b) => b.lift!);
     const palmsLeft = maxPalms - palms.length;
-    if (result.solved && (!hasSky || (lifts.length > 0 && skyReachable(level, lifts, palmsLeft)))) {
+    if (result.solved && (!hasSky || (lifts.length > 0 && skyReachable(level, lifts, palmsLeft, poseOk)))) {
       return true;
     }
 
@@ -153,7 +181,7 @@ export function solve(
             for (const line of [0, 1, 2, 3]) {
               const [nx, nz] = facingNormal(line, dir);
               const palm: PalmCell = { col: cell.col, row: cell.row, nx, nz, lift: false };
-              if (!gridPalmOk(palm)) continue;
+              if (!poseOk(cellPoint(level.size, cell.col, cell.row), unit([nx, 0, nz]))) continue;
               palms.push(palm);
               if (search()) return true;
               palms.pop();

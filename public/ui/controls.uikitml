@@ -30,6 +30,12 @@
     </ButtonIcon>
     <ButtonLabel class="button-label">Next</ButtonLabel>
   </Button>
+  <Button id="daily-button">
+    <ButtonIcon>
+      <CalendarDays></CalendarDays>
+    </ButtonIcon>
+    <ButtonLabel id="daily-label" class="button-label">Daily</ButtonLabel>
+  </Button>
   <Button id="hand-button">
     <ButtonIcon>
       <Hand></Hand>

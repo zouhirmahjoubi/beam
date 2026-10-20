@@ -116,6 +116,28 @@
         "scale": 0.1
       },
       "components": {}
+    },
+    {
+      "id": "hint-panel",
+      "name": "Level Caption",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "hint-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.1
+      },
+      "components": {}
     }
   ]
 }

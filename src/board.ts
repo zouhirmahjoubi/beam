@@ -50,7 +50,19 @@ import {
   type Piece,
   type TraceResult,
 } from './game/grid.js';
+import { Coach } from './coach.js';
+import { DeskAnchor, type FrameLike } from './desk-anchor.js';
+import { generateDaily } from './game/daily.js';
 import { LEVELS } from './game/levels.js';
+import {
+  currentStreak,
+  dayKey,
+  loadProgress,
+  recordDailySolve,
+  saveProgress,
+  type SaveData,
+  type SavedPiece,
+} from './progress.js';
 import { apertureVector, freeTrace, reflect3, type FreeResult, type PalmDisc, type SkyTarget, type V3 } from './game/optics.js';
 import { PALM_RADIUS, PalmReader, palmFacesHead, type HandSource } from './palms.js';
 
@@ -73,7 +85,7 @@ const LIFT_TILT = 0.35;
 const CONTROLS_TILT = -Math.PI * 0.32;
 /** Hit area for one board button, in meters; resized from the button layout. */
 const BUTTON_HIT_GEOMETRY = new BoxGeometry(1, 1, 1);
-const BUTTON_IDS = ['restart-button', 'next-button', 'hand-button'];
+const BUTTON_IDS = ['restart-button', 'next-button', 'daily-button', 'hand-button'];
 /** Invisible until hovered, but still hit by rays and fingertips. */
 const BUTTON_HIT_MATERIAL = new MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0, depthWrite: false });
 /** Palm glow fades in over 0.1 s, out over 0.15 s, and holds 0.15 s after the beam leaves. */
@@ -91,6 +103,8 @@ const FRAME_BUDGET_MS = 13.9;
 const FRAME_SAMPLES = 216;
 /** How far in front of the eyes the pause card floats. */
 const PAUSE_DISTANCE = 0.7;
+/** The caption floats above the far edge, tilted toward the player. */
+const HINT_TILT = -0.42;
 
 interface NativePlane {
   orientation?: string;
@@ -149,6 +163,19 @@ export class BoardSystem extends createSystem({
   private nextLevelAt = -1;
 
   private traySide = 1;
+  private coach!: Coach;
+  private now = 0;
+  private hintCard: Entity | undefined;
+  private hintText: { setProperties(p: { text: string }): void } | undefined;
+  private desk = new DeskAnchor();
+  private deskRestored = false;
+  private deskSaved = false;
+  private anchorPos = new Vector3();
+  private anchorQuat = new Quaternion();
+  private save!: SaveData;
+  /** True while the daily puzzle is on the board instead of a chapter level. */
+  private daily = false;
+  private dailyLabel: { setProperties(p: { text: string }): void } | undefined;
   private glowLevel = [0, 0];
   private lastPalmTouch = [-10, -10];
   private guardMask = 0;
@@ -188,6 +215,7 @@ export class BoardSystem extends createSystem({
   private up = new Vector3(0, 1, 0);
   private zAxis = new Vector3(0, 0, 1);
   private q = new Quaternion();
+  private q2 = new Quaternion();
 
   init(): void {
     this.base = buildBase(LEVELS.length);
@@ -214,8 +242,40 @@ export class BoardSystem extends createSystem({
         this.placeRequested = true;
       }),
     );
-    this.loadLevel(0);
+    this.coach = new Coach(this.base.root);
+    this.save = loadProgress(LEVELS[0].id);
+    this.traySide = this.save.traySide;
+    this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
+    for (const id of this.save.completed) this.completed.add(id);
+    const chapter = Math.max(0, LEVELS.findIndex((l) => l.id === this.save.levelId));
+    const today = generateDaily(dayKey());
+    const resumeDaily = this.save.boardId === today.id;
+    this.loadLevel(chapter, resumeDaily ? today : undefined, this.save.placed);
     this.wirePanels();
+  }
+
+  /** Write the current progress to storage. Runs on moves and level changes only. */
+  private persist(): void {
+    this.save.levelId = LEVELS[this.levelIndex].id;
+    this.save.boardId = this.level.id;
+    this.save.placed = this.placed.map((m): SavedPiece | null => (m ? { col: m.col, row: m.row, angle: m.angle } : null));
+    this.save.completed = [...this.completed];
+    this.save.traySide = this.traySide > 0 ? 1 : -1;
+    saveProgress(this.save);
+  }
+
+  /** Caption for the level on the board, hidden once it is solved. */
+  private showHint(): void {
+    const text = this.daily ? "Today's puzzle" : this.level.hint;
+    const card = this.hintCard?.object3D;
+    if (text) this.hintText?.setProperties({ text });
+    if (card) card.visible = !!text && !this.solved && !this.paused;
+  }
+
+  /** Label for the Daily button: the streak, once there is one. */
+  private dailyText(): string {
+    const streak = currentStreak(this.save.daily, dayKey());
+    return streak > 0 ? `Daily ${streak}` : 'Daily';
   }
 
   /**
@@ -234,6 +294,13 @@ export class BoardSystem extends createSystem({
     this.cleanupFuncs.push(() => this.setFrameTimeReadout(false));
     const panel = this.world.getSceneObject<UIKitMLAsset>('board-controls');
     this.handLabel = panel?.getElementById('hand-label') as typeof this.handLabel;
+    this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
+    this.dailyLabel = panel?.getElementById('daily-label') as typeof this.dailyLabel;
+    this.dailyLabel?.setProperties({ text: this.dailyText() });
+    this.hintCard = this.world.getSceneEntity('hint-panel');
+    const hint = this.world.getSceneObject<UIKitMLAsset>('hint-panel');
+    this.hintText = hint?.getElementById('hint-text') as typeof this.hintText;
+    this.showHint();
     if (!this.controls || !panel) return;
 
     // Each button gets its own hit area entity in world space. They are
@@ -258,6 +325,7 @@ export class BoardSystem extends createSystem({
         const action = entity.getValue(BoardButton, 'action');
         if (action === 0) this.restartLevel();
         else if (action === 1) this.nextLevel();
+        else if (action === 2) this.openDaily();
         else this.toggleTraySide();
         playSnap();
       }),
@@ -342,12 +410,19 @@ export class BoardSystem extends createSystem({
   }
 
   restartLevel(): void {
-    this.loadLevel(this.levelIndex);
+    this.loadLevel(this.levelIndex, this.daily ? this.level : undefined);
     this.seatPieces();
   }
 
+  /** Next chapter level; from the daily puzzle, back to the chapter level you were on. */
   nextLevel(): void {
-    this.loadLevel(this.levelIndex + 1);
+    this.loadLevel(this.daily ? this.levelIndex : this.levelIndex + 1);
+    this.seatPieces();
+  }
+
+  /** Today's puzzle, the same for every player on the same day. */
+  openDaily(): void {
+    this.loadLevel(this.levelIndex, generateDaily(dayKey()));
     this.seatPieces();
   }
 
@@ -357,6 +432,7 @@ export class BoardSystem extends createSystem({
     this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
     this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
     this.seatPieces();
+    this.persist();
   }
 
   /** Place the button bar on the board's front edge, tilted toward the player. */
@@ -372,6 +448,20 @@ export class BoardSystem extends createSystem({
     this.q.multiply(this.tilt);
     setWorldQuaternion(object, this.q);
     this.hitsPlaced = this.placeButtonHits();
+    const hint = this.hintCard?.object3D;
+    if (hint) {
+      this.c.set(0, 0.1, -(BOARD_SIZE_M / 2) - 0.05);
+      root.localToWorld(this.c);
+      setWorldPosition(hint, this.c);
+      this.q2.setFromAxisAngle(this.up, root.rotation.y);
+      this.tilt.setFromAxisAngle(this.xAxis, HINT_TILT);
+      this.q2.multiply(this.tilt);
+      setWorldQuaternion(hint, this.q2);
+      // Back to the controls' rotation for the readout below.
+      this.q.setFromAxisAngle(this.up, root.rotation.y);
+      this.tilt.setFromAxisAngle(this.xAxis, CONTROLS_TILT);
+      this.q.multiply(this.tilt);
+    }
     const fps = this.fpsCard?.object3D;
     if (fps) {
       // Just above the button bar, on the same tilted plane.
@@ -406,6 +496,7 @@ export class BoardSystem extends createSystem({
       this.base.hoverRing.visible = this.base.ghost.visible = false;
       for (const glow of this.base.palmGlows) glow.visible = false;
       this.glowLevel[0] = this.glowLevel[1] = 0;
+      this.coach.hide();
       if (card) {
         this.player.head.getWorldPosition(this.head);
         this.player.head.getWorldQuaternion(this.q);
@@ -424,12 +515,18 @@ export class BoardSystem extends createSystem({
     if (this.controls?.object3D) this.controls.object3D.visible = !this.paused;
     if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
     for (const hit of this.buttonHits) if (hit.object3D) hit.object3D.visible = !this.paused;
+    this.showHint();
   }
 
-  /** Swap the fixed pieces and tray for level `index`. */
-  loadLevel(index: number): void {
+  /**
+   * Swap the fixed pieces and tray. `index` is the chapter level; `dailyLevel`
+   * puts the daily puzzle on the board instead. `restore` puts saved pieces
+   * back on their cells when they still fit.
+   */
+  loadLevel(index: number, dailyLevel?: Level, restore?: ReadonlyArray<SavedPiece | null>): void {
     this.levelIndex = ((index % LEVELS.length) + LEVELS.length) % LEVELS.length;
-    const level = (this.level = LEVELS[this.levelIndex]);
+    this.daily = dailyLevel !== undefined;
+    const level = (this.level = dailyLevel ?? LEVELS[this.levelIndex]);
 
     this.releaseHeld();
     for (const entity of [...this.queries.pieces.entities]) {
@@ -483,27 +580,44 @@ export class BoardSystem extends createSystem({
         rotateMin: [0, -Math.PI, 0],
         rotateMax: [0, Math.PI, 0],
       });
-      this.moveToSlot(piece);
     });
 
+    if (restore && restore.length === level.tray.length) {
+      restore.forEach((saved, i) => {
+        if (saved && this.isFree(saved.col, saved.row, i)) {
+          const t = level.tray[i];
+          this.placed[i] = { kind: t.kind, col: saved.col, row: saved.row, angle: ((saved.angle % 8) + 8) % 8, color: t.color };
+        }
+      });
+    }
+    this.seatPieces();
+
+    this.coach.setLevel(level, !this.daily && !this.completed.has(level.id), this.traySide, this.now);
+    this.showHint();
+    const current = this.daily ? -1 : this.levelIndex;
     this.base.dots.forEach((dot, i) => {
-      dot.material = this.completed.has(LEVELS[i].id) || i === this.levelIndex ? dotMaterials.on : dotMaterials.off;
-      dot.scale.setScalar(i === this.levelIndex ? 1.6 : 1);
+      dot.material = this.completed.has(LEVELS[i].id) || i === current ? dotMaterials.on : dotMaterials.off;
+      dot.scale.setScalar(i === current ? 1.6 : 1);
     });
+    this.persist();
   }
 
   update(delta: number, time: number): void {
+    this.now = time;
     this.updateFrameTime(delta);
     if (this.placeRequested) {
       this.placeRequested = false;
       this.placeUntil = time + PLACEMENT_WINDOW;
       this.nextPlaceAt = 0;
       this.touched = false;
+      this.desk.reset();
+      this.deskRestored = this.deskSaved = false;
     }
     if (time < this.placeUntil && !this.touched && time >= this.nextPlaceAt) {
       this.seatBoard();
       this.nextPlaceAt = time + 0.5;
     }
+    if (this.immersive) this.rememberDesk(time);
 
     this.hands.update(this.input.xr as unknown as HandSource, this.player.gripSpaces, this.base.root);
     if (!this.hitsPlaced) this.hitsPlaced = this.placeButtonHits();
@@ -520,10 +634,7 @@ export class BoardSystem extends createSystem({
     this.refresh(time);
     this.animate(delta, time);
 
-    if (this.nextLevelAt > 0 && time >= this.nextLevelAt) {
-      this.loadLevel(this.levelIndex + 1);
-      this.seatPieces();
-    }
+    if (this.nextLevelAt > 0 && time >= this.nextLevelAt) this.nextLevel();
   }
 
   private indexOf(entity: Entity): number {
@@ -575,6 +686,47 @@ export class BoardSystem extends createSystem({
     }
     this.seatPieces();
     this.seatControls();
+  }
+
+  /**
+   * Desk memory: put the board back where it sat last session, and save the
+   * spot once the board has settled on a real desk.
+   */
+  private rememberDesk(time: number): void {
+    const xr = this.world.renderer.xr;
+    const frame = xr.getFrame() as unknown as FrameLike | null;
+    const space = xr.getReferenceSpace();
+    if (!frame || !space) return;
+    if (!this.desk.settled) this.desk.restore(frame);
+
+    if (!this.deskRestored && this.desk.pose(frame, space, this.anchorPos, this.anchorQuat)) {
+      // Reference space to world: the player rig is the reference space origin.
+      this.player.updateWorldMatrix(true, false);
+      this.player.localToWorld(this.anchorPos);
+      this.a.set(0, 0, -1).applyQuaternion(this.anchorQuat);
+      const root = this.base.root;
+      root.position.copy(this.anchorPos);
+      root.rotation.set(0, Math.atan2(-this.a.x, -this.a.z), 0);
+      root.updateMatrixWorld(true);
+      this.onDesk = true;
+      this.base.stand.visible = false;
+      this.seatPieces();
+      this.seatControls();
+      this.deskRestored = this.deskSaved = true;
+      this.touched = true;
+      return;
+    }
+
+    // Save only a real desk spot, once the placement window is over.
+    if (!this.deskSaved && this.onDesk && time >= this.placeUntil && this.desk.settled) {
+      // The board is already here: the new anchor is for next session only.
+      this.deskSaved = this.deskRestored = true;
+      const root = this.base.root;
+      root.getWorldPosition(this.anchorPos);
+      this.player.worldToLocal(this.anchorPos);
+      this.anchorQuat.setFromAxisAngle(this.up, root.rotation.y);
+      this.desk.save(frame, space, this.anchorPos, this.anchorQuat);
+    }
   }
 
   private seatPieces(): void {
@@ -642,6 +794,7 @@ export class BoardSystem extends createSystem({
       } else if (this.candidateOk[i]) {
         const c = this.candidate[i];
         this.placed[i] = { kind: c.kind, col: c.col, row: c.row, angle: c.angle, color: c.color };
+        this.coach.progress(this.now);
         playSnap();
       } else {
         this.placed[i] = null;
@@ -651,6 +804,7 @@ export class BoardSystem extends createSystem({
     }
     this.pendingSnap = 0;
     this.base.ghost.visible = false;
+    this.persist();
   }
 
   private isFree(col: number, row: number, self: number): boolean {
@@ -774,6 +928,7 @@ export class BoardSystem extends createSystem({
     this.palmTouch[1] = touch1;
     if (touch0) this.lastPalmTouch[0] = time;
     if (touch1) this.lastPalmTouch[1] = time;
+    if (touch0 || touch1 || this.queries.held.entities.size > 0) this.coach.progress(time);
 
     if (!this.solved) {
       this.litMask = lit;
@@ -792,8 +947,15 @@ export class BoardSystem extends createSystem({
     this.solved = true;
     this.solvedAt = time;
     this.nextLevelAt = time + NEXT_LEVEL_DELAY;
-    this.completed.add(this.level.id);
-    this.base.dots[this.levelIndex].material = dotMaterials.on;
+    if (this.daily) {
+      this.save.daily = recordDailySolve(this.save.daily, dayKey());
+      this.dailyLabel?.setProperties({ text: this.dailyText() });
+    } else {
+      this.completed.add(this.level.id);
+      this.base.dots[this.levelIndex].material = dotMaterials.on;
+    }
+    this.persist();
+    this.showHint();
     playSolved();
   }
 
@@ -838,6 +1000,7 @@ export class BoardSystem extends createSystem({
   }
 
   private animate(delta: number, time: number): void {
+    this.coach.update(time, this.solved);
     const view = this.content;
     if (view) {
       const ease = Math.min(1, delta * 8);

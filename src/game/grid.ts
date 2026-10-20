@@ -58,6 +58,10 @@ export interface Level {
   sky?: SkyCrystal[];
   /** True when the level needs a palm on the board. */
   palm?: boolean;
+  /** Palms the intended answer uses (the solver's budget). Defaults to 2 for palm levels. */
+  hands?: 1 | 2;
+  /** One short caption naming the idea of the level. */
+  hint?: string;
 }
 
 /** A piece on the board. `angle` is its mirror line in 45 degree steps. */

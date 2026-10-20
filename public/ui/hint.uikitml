@@ -1,0 +1,23 @@
+<!--
+  One short caption above the board's far edge, naming the idea of the level.
+-->
+<style>
+  .chip {
+    flex-direction: row;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 16px;
+    padding-right: 16px;
+    border-radius: 12px;
+    background-color: #101418;
+  }
+
+  .text {
+    font-size: 22px;
+    font-weight: 500;
+    color: #f2f5f8;
+  }
+</style>
+<div class="chip">
+  <span id="hint-text" class="text">Hold your open hand in the beam</span>
+</div>

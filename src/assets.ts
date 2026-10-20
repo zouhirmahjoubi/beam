@@ -25,6 +25,11 @@ export default defineAssets({
     type: AssetType.UIKitML,
     name: 'Pause Panel',
   },
+  'hint-panel': {
+    url: publicAssetUrl('ui/hint.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Level Caption',
+  },
   'fps-panel': {
     url: publicAssetUrl('ui/fps.uikitml'),
     type: AssetType.UIKitML,

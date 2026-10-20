@@ -22,24 +22,20 @@ The terminal prints a **Network** address such as `https://192.168.x.x:8081/`. T
 3. The browser shows a certificate warning, which is normal for a local test build. Choose Advanced, then continue.
 4. Press **Play in headset** and allow the passthrough and hand tracking prompts.
 
-## What to try (M2)
+## What to try (M3)
 
-Eight levels play in a row. The dots on the far edge of the board show which one you are on, and a solved board moves to the next after a short pause.
+Sixteen levels play in two chapters. The dots on the far edge show where you are.
 
-1. Open Hand: no pieces. Hold your open palm upright in the beam, facing back toward the emitter at an angle, and the light bounces off your hand to the far crystal.
-2. First Light: two mirrors. Point at a mirror (a blue ring shows under it) and pinch to pull it into your hand, or reach and pinch it. Turn your hand like a dial to rotate it, then let go over a cell.
-3. Hand Off: one mirror plus your palm.
-4. Fork: a splitter sends light two ways.
-5. Amber: the amber crystal only lights with amber light. Use the amber filter.
-6. Lift: the beam runs toward you. Tip your palm up and slightly away under the floating crystal, as if holding a tray.
-7. Periscope: the beam runs toward you. One palm lifts it, the other hand, higher up, turns it away from you and flat into the crystal's ring. Two hands needed.
-8. Prism: mirror, splitter and cyan filter together.
-
-The buttons on the front edge of the board (Restart, Next, tray side) work with a fingertip press or by pointing and pinching. Picking up a controller pauses the game until you put it down.
+1. First start: Open Hand shows a caption above the board. After a short pause a see-through ghost hand shows the move: an open palm in the beam. Copy it and the crystal lights.
+2. Levels with pieces show the ghost pinching a piece in the tray, carrying it to its cell and turning it. Point at a piece (a blue ring shows under it) and pinch to pull it into your hand, or reach and pinch it.
+3. Lift and High Shelf: the beam runs toward you. Tip your palm up and slightly away under the floating crystal, like holding a tray.
+4. Periscope and Both Hands need both hands.
+5. Buttons on the front edge: Restart, Next, Daily (today's puzzle, with your streak once you have one) and the tray side switch for left-handed play. Each works with a fingertip press or by pointing and pinching.
+6. Take the headset off mid-level and come back: the level and your pieces are where you left them.
+7. Next session, the board should come back to the same spot on your desk.
+8. Picking up a controller pauses the game until you put it down.
 
 To report speed, add ?fps=1 to the link: a small readout above the buttons shows the time per frame and the share of slow frames.
-
-The light on your palm glows when the beam touches it. Your real hand should hide the beam where it passes in front of it.
 
 ## Tell me
 
