@@ -74,3 +74,22 @@ test('the shown streak drops to zero once a full day is missed', () => {
   assert.equal(currentStreak(daily, '2026-11-04'), 3);
   assert.equal(currentStreak(daily, '2026-11-05'), 0);
 });
+
+test('broken saved pieces load as empty tray slots', () => {
+  const store = memory();
+  store.setItem(
+    'palmlight.save.v1',
+    JSON.stringify({
+      version: 1,
+      levelId: 'first-light',
+      boardId: 'first-light',
+      placed: [{ col: 'x', row: 4, angle: 1 }, { col: 2, row: 4, angle: 1 }, { col: -1, row: 0, angle: 0 }, 7],
+      chapterPlaced: 'nope',
+      completed: ['open-hand', 3],
+    }),
+  );
+  const save = loadProgress('open-hand', store);
+  assert.deepEqual(save.placed, [null, { col: 2, row: 4, angle: 1 }, null, null]);
+  assert.deepEqual(save.chapterPlaced, []);
+  assert.deepEqual(save.completed, ['open-hand']);
+});

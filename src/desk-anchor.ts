@@ -60,7 +60,8 @@ export class DeskAnchor {
   restore(frame: FrameLike): void {
     const handle = readHandle();
     const session = frame.session;
-    if (this.restoring || !handle || !session.restorePersistentAnchor) {
+    if (this.restoring) return;
+    if (!handle || !session.restorePersistentAnchor) {
       this.settled = true;
       return;
     }

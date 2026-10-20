@@ -97,7 +97,10 @@ const ease = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 export class Coach {
   private hands: GhostHand[] = [buildGhostHand(), buildGhostHand()];
-  private demo: Demo | null = null;
+  /** Built on first use; undefined until then, null when there is no answer. */
+  private demo: Demo | null | undefined = undefined;
+  private level: Level | null = null;
+  private traySide = 1;
   private startedAt = 0;
   private lastProgress = 0;
   private firstTime = false;
@@ -116,7 +119,9 @@ export class Coach {
     this.firstTime = firstTime;
     this.startedAt = this.lastProgress = time;
     this.playing = false;
-    this.demo = this.buildDemo(level, traySide);
+    this.level = level;
+    this.traySide = traySide;
+    this.demo = undefined;
     this.hide();
   }
 
@@ -130,17 +135,20 @@ export class Coach {
   }
 
   update(time: number, solved: boolean): void {
-    if (!this.demo || solved) {
+    if (this.demo === null || solved || !this.level) {
       if (this.playing) this.hide();
       this.playing = false;
       return;
     }
     const wait = this.firstTime ? FIRST_DELAY : IDLE_REPLAY;
     if (!this.playing && time - this.lastProgress >= wait) {
+      // Solve only now: most level loads never show the demo.
+      if (this.demo === undefined) this.demo = this.buildDemo(this.level, this.traySide);
+      if (!this.demo) return;
       this.playing = true;
       this.startedAt = time;
     }
-    if (!this.playing) return;
+    if (!this.playing || !this.demo) return;
     const t = ((time - this.startedAt) % LOOP) / LOOP;
     if (this.demo.kind === 'palm') this.animatePalms(this.demo, t);
     else this.animatePinch(this.demo, t);

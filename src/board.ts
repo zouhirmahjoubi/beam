@@ -175,6 +175,7 @@ export class BoardSystem extends createSystem({
   private save!: SaveData;
   /** True while the daily puzzle is on the board instead of a chapter level. */
   private daily = false;
+  private dailyCache: Level | null = null;
   private dailyLabel: { setProperties(p: { text: string }): void } | undefined;
   private glowLevel = [0, 0];
   private lastPalmTouch = [-10, -10];
@@ -238,8 +239,10 @@ export class BoardSystem extends createSystem({
     });
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((state) => {
-        this.immersive = state !== VisibilityState.NonImmersive;
-        this.placeRequested = true;
+        const immersive = state !== VisibilityState.NonImmersive;
+        // A system menu blurs the session; only entering or leaving it re-seats the board.
+        if (immersive !== this.immersive) this.placeRequested = true;
+        this.immersive = immersive;
       }),
     );
     this.coach = new Coach(this.base.root);
@@ -248,10 +251,26 @@ export class BoardSystem extends createSystem({
     this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
     for (const id of this.save.completed) this.completed.add(id);
     const chapter = Math.max(0, LEVELS.findIndex((l) => l.id === this.save.levelId));
-    const today = generateDaily(dayKey());
-    const resumeDaily = this.save.boardId === today.id;
-    this.loadLevel(chapter, resumeDaily ? today : undefined, this.save.placed);
+    const resumeDaily = this.save.boardId === `daily-${dayKey()}`;
+    if (resumeDaily) {
+      this.loadLevel(chapter, this.dailyLevel(), this.save.placed);
+    } else {
+      // A finished or stale daily leaves the chapter's own pieces in chapterPlaced.
+      const own = this.save.boardId === LEVELS[chapter].id ? this.save.placed : this.save.chapterPlaced;
+      this.loadLevel(chapter, undefined, own);
+    }
     this.wirePanels();
+    // Build today's puzzle soon after start, before most players enter the headset,
+    // so the Daily button never blocks a frame.
+    const warm = window.setTimeout(() => this.dailyLevel(), 1500);
+    this.cleanupFuncs.push(() => window.clearTimeout(warm));
+  }
+
+  /** Today's daily puzzle, generated once per day and cached. */
+  private dailyLevel(): Level {
+    const id = `daily-${dayKey()}`;
+    if (this.dailyCache?.id !== id) this.dailyCache = generateDaily(dayKey());
+    return this.dailyCache;
   }
 
   /** Write the current progress to storage. Runs on moves and level changes only. */
@@ -259,6 +278,7 @@ export class BoardSystem extends createSystem({
     this.save.levelId = LEVELS[this.levelIndex].id;
     this.save.boardId = this.level.id;
     this.save.placed = this.placed.map((m): SavedPiece | null => (m ? { col: m.col, row: m.row, angle: m.angle } : null));
+    if (!this.daily) this.save.chapterPlaced = this.save.placed;
     this.save.completed = [...this.completed];
     this.save.traySide = this.traySide > 0 ? 1 : -1;
     saveProgress(this.save);
@@ -416,13 +436,14 @@ export class BoardSystem extends createSystem({
 
   /** Next chapter level; from the daily puzzle, back to the chapter level you were on. */
   nextLevel(): void {
-    this.loadLevel(this.daily ? this.levelIndex : this.levelIndex + 1);
+    if (this.daily) this.loadLevel(this.levelIndex, undefined, this.save.chapterPlaced);
+    else this.loadLevel(this.levelIndex + 1);
     this.seatPieces();
   }
 
   /** Today's puzzle, the same for every player on the same day. */
   openDaily(): void {
-    this.loadLevel(this.levelIndex, generateDaily(dayKey()));
+    this.loadLevel(this.levelIndex, this.dailyLevel());
     this.seatPieces();
   }
 
@@ -948,7 +969,8 @@ export class BoardSystem extends createSystem({
     this.solvedAt = time;
     this.nextLevelAt = time + NEXT_LEVEL_DELAY;
     if (this.daily) {
-      this.save.daily = recordDailySolve(this.save.daily, dayKey());
+      // Credit the day the puzzle belongs to, even if it is solved after midnight.
+      this.save.daily = recordDailySolve(this.save.daily, this.level.id.slice('daily-'.length));
       this.dailyLabel?.setProperties({ text: this.dailyText() });
     } else {
       this.completed.add(this.level.id);

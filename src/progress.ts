@@ -25,6 +25,8 @@ export interface SaveData {
   /** Level whose pieces are saved below: a chapter level or a daily id. */
   boardId: string;
   placed: Array<SavedPiece | null>;
+  /** Pieces on the chapter level, kept while the daily puzzle is on the board. */
+  chapterPlaced: Array<SavedPiece | null>;
   completed: string[];
   traySide: 1 | -1;
   daily: DailyStreak;
@@ -43,6 +45,7 @@ export function emptySave(firstLevelId: string): SaveData {
     levelId: firstLevelId,
     boardId: firstLevelId,
     placed: [],
+    chapterPlaced: [],
     completed: [],
     traySide: 1,
     daily: { lastSolved: null, streak: 0, best: 0 },
@@ -58,6 +61,17 @@ function defaultStore(): KeyValueStore | null {
   }
 }
 
+const isCell = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) < 64;
+
+/** Keep only well-formed saved pieces; anything else becomes an empty tray slot. */
+function cleanPieces(list: unknown): Array<SavedPiece | null> {
+  if (!Array.isArray(list)) return [];
+  return list.map((p) => {
+    const m = p as Partial<SavedPiece> | null;
+    return m && isCell(m.col) && isCell(m.row) && Number.isInteger(m.angle) ? { col: m.col!, row: m.row!, angle: m.angle! } : null;
+  });
+}
+
 /** Read the save, falling back to a fresh one when it is missing or broken. */
 export function loadProgress(firstLevelId: string, store: KeyValueStore | null = defaultStore()): SaveData {
   const fresh = emptySave(firstLevelId);
@@ -69,8 +83,9 @@ export function loadProgress(firstLevelId: string, store: KeyValueStore | null =
     return {
       ...fresh,
       ...data,
-      placed: Array.isArray(data.placed) ? data.placed : [],
-      completed: Array.isArray(data.completed) ? data.completed : [],
+      placed: cleanPieces(data.placed),
+      chapterPlaced: cleanPieces(data.chapterPlaced),
+      completed: Array.isArray(data.completed) ? data.completed.filter((id) => typeof id === 'string') : [],
       traySide: data.traySide === -1 ? -1 : 1,
       daily: { ...fresh.daily, ...data.daily },
     } as SaveData;
