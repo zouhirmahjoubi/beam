@@ -54,6 +54,8 @@ import { Coach } from './coach.js';
 import { DeskAnchor, type FrameLike } from './desk-anchor.js';
 import { generateDaily } from './game/daily.js';
 import { LEVELS } from './game/levels.js';
+import { decodeLevel } from './game/share.js';
+import { solve } from './game/solver.js';
 import {
   currentStreak,
   dayKey,
@@ -207,7 +209,13 @@ export class BoardSystem extends createSystem({
   private anchorQuat = new Quaternion();
   private save!: SaveData;
   /** True while the daily puzzle is on the board instead of a chapter level. */
+  /** The board shows the daily or a shared puzzle instead of a chapter level. */
+  private extra = false;
   private daily = false;
+  private shared = false;
+  /** One-off caption shown instead of the level's hint, such as a broken link. */
+  private notice: string | null = null;
+  private levelLoaded = false;
   private dailyCache: Level | null = null;
   private dailyLabel: { setProperties(p: { text: string }): void } | undefined;
   private glowLevel = [0, 0];
@@ -292,7 +300,20 @@ export class BoardSystem extends createSystem({
     for (const id of this.save.completed) this.completed.add(id);
     const chapter = Math.max(0, LEVELS.findIndex((l) => l.id === this.save.levelId));
     const resumeDaily = this.save.boardId === `daily-${dayKey()}`;
-    if (resumeDaily) {
+    // A shared puzzle comes from the link, or from the save once the link is gone.
+    const link = new URLSearchParams(window.location.search).get('p');
+    const savedCode = this.save.boardId.startsWith('shared-') ? this.save.boardId.slice('shared-'.length) : null;
+    const shared = this.sharedLevel(link ?? savedCode);
+    if (link !== null) {
+      // A reload resumes from the save, so the link has done its job.
+      const url = new URL(window.location.href);
+      url.searchParams.delete('p');
+      window.history.replaceState(null, '', url);
+      if (!shared) this.notice = 'That puzzle link did not work';
+    }
+    if (shared) {
+      this.loadLevel(chapter, shared, this.save.boardId === shared.id ? this.save.placed : undefined);
+    } else if (resumeDaily) {
       this.loadLevel(chapter, this.dailyLevel(), this.save.placed);
     } else {
       // A finished or stale daily leaves the chapter's own pieces in chapterPlaced.
@@ -304,6 +325,12 @@ export class BoardSystem extends createSystem({
     // so the Daily button never blocks a frame.
     const warm = window.setTimeout(() => this.dailyLevel(), 1500);
     this.cleanupFuncs.push(() => window.clearTimeout(warm));
+  }
+
+  /** The puzzle in a share code, or null when the code is broken or the puzzle cannot be solved. */
+  private sharedLevel(code: string | null): Level | null {
+    const level = code ? decodeLevel(code) : null;
+    return level && solve(level) ? level : null;
   }
 
   /** Today's daily puzzle, generated once per day and cached. */
@@ -318,7 +345,7 @@ export class BoardSystem extends createSystem({
     this.save.levelId = LEVELS[this.levelIndex].id;
     this.save.boardId = this.level.id;
     this.save.placed = this.placed.map((m): SavedPiece | null => (m ? { col: m.col, row: m.row, angle: m.angle } : null));
-    if (!this.daily) this.save.chapterPlaced = this.save.placed;
+    if (!this.extra) this.save.chapterPlaced = this.save.placed;
     this.save.completed = [...this.completed];
     this.save.traySide = this.traySide > 0 ? 1 : -1;
     saveProgress(this.save);
@@ -326,7 +353,7 @@ export class BoardSystem extends createSystem({
 
   /** Caption for the level on the board, hidden once it is solved. */
   private showHint(): void {
-    const text = this.daily ? "Today's puzzle" : this.level.hint;
+    const text = this.notice ?? (this.daily ? "Today's puzzle" : this.shared ? 'A puzzle shared with you' : this.level.hint);
     const card = this.hintCard?.object3D;
     if (text) this.hintText?.setProperties({ text });
     if (card) card.visible = !!text && !this.solved && !this.paused;
@@ -496,13 +523,13 @@ export class BoardSystem extends createSystem({
   }
 
   restartLevel(): void {
-    this.loadLevel(this.levelIndex, this.daily ? this.level : undefined);
+    this.loadLevel(this.levelIndex, this.extra ? this.level : undefined);
     this.seatPieces();
   }
 
-  /** Next chapter level; from the daily puzzle, back to the chapter level you were on. */
+  /** Next chapter level; from the daily or a shared puzzle, back to the chapter level you were on. */
   nextLevel(): void {
-    if (this.daily) this.loadLevel(this.levelIndex, undefined, this.save.chapterPlaced);
+    if (this.extra) this.loadLevel(this.levelIndex, undefined, this.save.chapterPlaced);
     else this.loadLevel(this.levelIndex + 1);
     this.seatPieces();
   }
@@ -657,14 +684,19 @@ export class BoardSystem extends createSystem({
   }
 
   /**
-   * Swap the fixed pieces and tray. `index` is the chapter level; `dailyLevel`
-   * puts the daily puzzle on the board instead. `restore` puts saved pieces
+   * Swap the fixed pieces and tray. `index` is the chapter level; `extraLevel`
+   * puts the daily or a shared puzzle on the board instead. `restore` puts saved pieces
    * back on their cells when they still fit.
    */
-  loadLevel(index: number, dailyLevel?: Level, restore?: ReadonlyArray<SavedPiece | null>): void {
+  loadLevel(index: number, extraLevel?: Level, restore?: ReadonlyArray<SavedPiece | null>): void {
     this.levelIndex = ((index % LEVELS.length) + LEVELS.length) % LEVELS.length;
-    this.daily = dailyLevel !== undefined;
-    const level = (this.level = dailyLevel ?? LEVELS[this.levelIndex]);
+    this.extra = extraLevel !== undefined;
+    this.daily = !!extraLevel?.id.startsWith('daily-');
+    this.shared = !!extraLevel?.id.startsWith('shared-');
+    // A notice stays for the first board only.
+    if (this.levelLoaded) this.notice = null;
+    this.levelLoaded = true;
+    const level = (this.level = extraLevel ?? LEVELS[this.levelIndex]);
 
     this.releaseHeld();
     for (const entity of [...this.queries.pieces.entities]) {
@@ -737,9 +769,9 @@ export class BoardSystem extends createSystem({
     }
     this.seatPieces();
 
-    this.coach.setLevel(level, !this.daily && !this.completed.has(level.id), this.traySide, this.now, () => this.placed);
+    this.coach.setLevel(level, !this.extra && !this.completed.has(level.id), this.traySide, this.now, () => this.placed);
     this.showHint();
-    const current = this.daily ? -1 : this.levelIndex;
+    const current = this.extra ? -1 : this.levelIndex;
     this.base.dots.forEach((dot, i) => {
       dot.material = this.completed.has(LEVELS[i].id) || i === current ? dotMaterials.on : dotMaterials.off;
       dot.scale.setScalar(i === current ? 1.6 : 1);
@@ -1148,11 +1180,12 @@ export class BoardSystem extends createSystem({
     this.solved = true;
     this.solvedAt = time;
     this.nextLevelAt = time + NEXT_LEVEL_DELAY;
+    // A shared puzzle counts toward neither the chapter nor the streak.
     if (this.daily) {
       // Credit the day the puzzle belongs to, even if it is solved after midnight.
       this.save.daily = recordDailySolve(this.save.daily, this.level.id.slice('daily-'.length));
       this.dailyLabel?.setProperties({ text: this.dailyText() });
-    } else {
+    } else if (!this.shared) {
       this.completed.add(this.level.id);
       this.base.dots[this.levelIndex].material = dotMaterials.on;
     }
