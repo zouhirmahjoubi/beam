@@ -160,6 +160,28 @@
         "scale": 0.1
       },
       "components": {}
+    },
+    {
+      "id": "maker-panel",
+      "name": "Puzzle Maker Bar",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "maker-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.1
+      },
+      "components": {}
     }
   ]
 }

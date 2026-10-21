@@ -93,3 +93,13 @@ test('broken saved pieces load as empty tray slots', () => {
   assert.deepEqual(save.chapterPlaced, []);
   assert.deepEqual(save.completed, ['open-hand']);
 });
+
+test('the puzzle being made survives a reload, and a bad one is dropped', () => {
+  const store = memory();
+  const save = { ...emptySave('open-hand'), maker: 'AQYAAgFEAAAGAAAAAQIGCg' };
+  saveProgress(save, store);
+  assert.equal(loadProgress('open-hand', store).maker, 'AQYAAgFEAAAGAAAAAQIGCg');
+  store.setItem('palmlight.save.v1', JSON.stringify({ ...save, maker: 42 }));
+  assert.equal(loadProgress('open-hand', store).maker, null);
+  assert.equal(emptySave('open-hand').maker, null);
+});

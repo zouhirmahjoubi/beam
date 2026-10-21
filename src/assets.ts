@@ -25,6 +25,11 @@ export default defineAssets({
     type: AssetType.UIKitML,
     name: 'Pause Panel',
   },
+  'maker-panel': {
+    url: publicAssetUrl('ui/maker.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Puzzle Maker Bar',
+  },
   'desk-panel': {
     url: publicAssetUrl('ui/desk.uikitml'),
     type: AssetType.UIKitML,

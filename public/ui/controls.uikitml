@@ -36,6 +36,12 @@
     </ButtonIcon>
     <ButtonLabel id="daily-label" class="button-label">Daily</ButtonLabel>
   </Button>
+  <Button id="make-button">
+    <ButtonIcon>
+      <Pencil></Pencil>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Make</ButtonLabel>
+  </Button>
   <Button id="hand-button">
     <ButtonIcon>
       <Hand></Hand>

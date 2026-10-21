@@ -30,6 +30,8 @@ export interface SaveData {
   completed: string[];
   traySide: 1 | -1;
   daily: DailyStreak;
+  /** Share code of the puzzle being made, so a reload or a new session keeps it. */
+  maker: string | null;
 }
 
 export interface KeyValueStore {
@@ -49,6 +51,7 @@ export function emptySave(firstLevelId: string): SaveData {
     completed: [],
     traySide: 1,
     daily: { lastSolved: null, streak: 0, best: 0 },
+    maker: null,
   };
 }
 
@@ -88,6 +91,8 @@ export function loadProgress(firstLevelId: string, store: KeyValueStore | null =
       completed: Array.isArray(data.completed) ? data.completed.filter((id) => typeof id === 'string') : [],
       traySide: data.traySide === -1 ? -1 : 1,
       daily: { ...fresh.daily, ...data.daily },
+      // Checked again by decodeLevel when the maker opens it.
+      maker: typeof data.maker === 'string' ? data.maker : null,
     } as SaveData;
   } catch {
     return fresh;

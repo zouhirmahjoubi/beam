@@ -24,7 +24,8 @@ import {
   type Object3D,
 } from '@iwsdk/core';
 import { playLit, playPalm, playSnap, playSolved, playTurn } from './audio.js';
-import { BoardButton, BoardPiece } from './beam-components.js';
+import { showSharePage } from './share-page.js';
+import { BoardButton, BoardCell, BoardPiece } from './beam-components.js';
 import {
   BEAM_Y,
   BOARD_SIZE,
@@ -49,12 +50,14 @@ import {
   type PalmCell,
   type Piece,
   type TraceResult,
+  type TrayPiece,
 } from './game/grid.js';
 import { Coach } from './coach.js';
 import { DeskAnchor, type FrameLike } from './desk-anchor.js';
 import { generateDaily } from './game/daily.js';
 import { LEVELS } from './game/levels.js';
-import { decodeLevel } from './game/share.js';
+import { checkShare, draftLevel, emptyDraft, moveLight, tapCell, type Draft } from './game/maker.js';
+import { decodeLevel, encodeLevel } from './game/share.js';
 import { solve } from './game/solver.js';
 import {
   currentStreak,
@@ -88,7 +91,21 @@ const LIFT_TILT = 0.35;
 const CONTROLS_TILT = -Math.PI * 0.32;
 /** Hit area for one board button, in meters; resized from the button layout. */
 const BUTTON_HIT_GEOMETRY = new BoxGeometry(1, 1, 1);
-const BUTTON_IDS = ['restart-button', 'next-button', 'daily-button', 'hand-button'];
+const BUTTON_IDS = ['restart-button', 'next-button', 'daily-button', 'hand-button', 'make-button'];
+/** The maker bar's buttons; their actions follow the Find my desk button. */
+const MAKER_IDS = ['maker-clear', 'maker-move', 'maker-share', 'maker-done'];
+const MAKER_ACTION = 6;
+/** The maker's tray: every piece a made puzzle can use. */
+const PALETTE: TrayPiece[] = [
+  { kind: 'mirror' },
+  { kind: 'mirror' },
+  { kind: 'mirror' },
+  { kind: 'splitter' },
+  { kind: 'filter', color: 1 },
+  { kind: 'filter', color: 2 },
+];
+/** In the maker a palm is a hand, not a mirror: a shared puzzle is solved with its pieces. */
+const NO_PALMS: ReadonlyArray<PalmCell | null> = [];
 /** Invisible until hovered, but still hit by rays and fingertips. */
 const BUTTON_HIT_MATERIAL = new MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0, depthWrite: false });
 /** Palm glow fades in over 0.1 s, out over 0.15 s, and holds 0.15 s after the beam leaves. */
@@ -114,8 +131,8 @@ const SNAP_HYSTERESIS = 0.15;
 const MIN_EYE_HEIGHT = 0.3;
 /** Meta's guidance: wait this long for surfaces before offering a room scan. */
 const ROOM_SCAN_DELAY = 3;
-/** Action index of the Find my desk button (after the four bar buttons). */
-const DESK_ACTION = 4;
+/** Action index of the Find my desk button (after the five bar buttons). */
+const DESK_ACTION = 5;
 /** Space between the bar and the Find my desk card, in meters. */
 const DESK_CARD_GAP = 0.012;
 /** The caption floats above the far edge, tilted toward the player. */
@@ -146,6 +163,9 @@ export class BoardSystem extends createSystem({
   buttons: { required: [BoardButton] },
   buttonsPressed: { required: [BoardButton, Pressed] },
   buttonsHovered: { required: [BoardButton, Hovered] },
+  cells: { required: [BoardCell] },
+  cellsPressed: { required: [BoardCell, Pressed] },
+  cellsHovered: { required: [BoardCell, Hovered] },
   planes: { required: [XRPlane] },
 }) {
   private base!: BaseView;
@@ -249,6 +269,18 @@ export class BoardSystem extends createSystem({
   private roomScanUsed = false;
   private deskCard: Entity | undefined;
   private deskShown = false;
+  /** Puzzle maker: the fixed pieces being laid out, and its own bar. */
+  private making = false;
+  private draft: Draft = emptyDraft();
+  private moveArmed = false;
+  private makerSolved = false;
+  /** Why Share did not work, shown until the next change. */
+  private makerNote: string | null = null;
+  private makerCard: Entity | undefined;
+  /** A link waiting for the headset session to end before its page shows. */
+  private pendingShare: string | null = null;
+  /** The tray pad's distance from the board center, before any second column. */
+  private trayX = 0;
   private planeArrived = false;
   private placeRequested = true;
   private touched = false;
@@ -291,15 +323,22 @@ export class BoardSystem extends createSystem({
         // A system menu blurs the session; only entering or leaving it re-seats the board.
         if (immersive !== this.immersive) this.placeRequested = true;
         this.immersive = immersive;
+        if (!immersive && this.pendingShare) {
+          showSharePage(this.pendingShare);
+          this.pendingShare = null;
+        }
       }),
     );
     this.coach = new Coach(this.base.root);
     this.save = loadProgress(LEVELS[0].id);
     this.traySide = this.save.traySide;
+    this.trayX = Math.abs(this.base.trayPad.position.x);
     this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
     for (const id of this.save.completed) this.completed.add(id);
     const chapter = Math.max(0, LEVELS.findIndex((l) => l.id === this.save.levelId));
     const resumeDaily = this.save.boardId === `daily-${dayKey()}`;
+    // Pieces on the maker's board, read before the first load saves over them.
+    const makerPlaced = this.save.boardId === 'maker' ? this.save.placed : null;
     // A shared puzzle comes from the link, or from the save once the link is gone.
     const link = new URLSearchParams(window.location.search).get('p');
     const savedCode = this.save.boardId.startsWith('shared-') ? this.save.boardId.slice('shared-'.length) : null;
@@ -321,6 +360,7 @@ export class BoardSystem extends createSystem({
       this.loadLevel(chapter, undefined, own);
     }
     this.wirePanels();
+    if (makerPlaced && !shared) this.openMaker(makerPlaced);
     // Build today's puzzle soon after start, before most players enter the headset,
     // so the Daily button never blocks a frame.
     const warm = window.setTimeout(() => this.dailyLevel(), 1500);
@@ -348,12 +388,13 @@ export class BoardSystem extends createSystem({
     if (!this.extra) this.save.chapterPlaced = this.save.placed;
     this.save.completed = [...this.completed];
     this.save.traySide = this.traySide > 0 ? 1 : -1;
+    if (this.making) this.save.maker = encodeLevel(draftLevel(this.draft, PALETTE));
     saveProgress(this.save);
   }
 
   /** Caption for the level on the board, hidden once it is solved. */
   private showHint(): void {
-    const text = this.notice ?? (this.daily ? "Today's puzzle" : this.shared ? 'A puzzle shared with you' : this.level.hint);
+    const text = this.making ? this.makerText() : this.notice ?? (this.daily ? "Today's puzzle" : this.shared ? 'A puzzle shared with you' : this.level.hint);
     const card = this.hintCard?.object3D;
     if (text) this.hintText?.setProperties({ text });
     if (card) card.visible = !!text && !this.solved && !this.paused;
@@ -400,6 +441,10 @@ export class BoardSystem extends createSystem({
     this.buttonEls[DESK_ACTION] = el(desk, 'desk-button');
     this.barEl = el(panel, 'bar');
     this.deskBarEl = el(desk, 'desk-bar');
+    this.makerCard = this.world.getSceneEntity('maker-panel');
+    if (this.makerCard?.object3D) this.makerCard.object3D.visible = false;
+    const maker = this.world.getSceneObject<UIKitMLAsset>('maker-panel');
+    MAKER_IDS.forEach((id, i) => (this.buttonEls[MAKER_ACTION + i] = el(maker, id)));
     // A label change (Daily 3, Tray right) lays the bar out again: re-place the hits.
     const relayout = () => {
       this.hitsPlaced = false;
@@ -407,13 +452,23 @@ export class BoardSystem extends createSystem({
     for (const e of [...this.buttonEls, this.barEl, this.deskBarEl]) {
       if (e) this.cleanupFuncs.push(e.size.subscribe(relayout), e.relativeCenter.subscribe(relayout));
     }
-    [...BUTTON_IDS, 'desk-button'].forEach((_, action) => {
+    [...BUTTON_IDS, 'desk-button', ...MAKER_IDS].forEach((_, action) => {
       const hit = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
       const entity = this.world.createTransformEntity(hit);
       entity.addComponent(BoardButton, { action });
       entity.addComponent(RayInteractable);
       entity.addComponent(PokeInteractable);
     });
+    // Maker cells: a point-and-pinch target per cell, out of reach until the maker opens.
+    // No fingertip press, so a hand placing a piece never changes a cell by accident.
+    for (let cell = 0; cell < BOARD_SIZE * BOARD_SIZE; cell++) {
+      const tile = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
+      tile.visible = false;
+      tile.position.set(0, -10, 0);
+      const entity = this.world.createTransformEntity(tile);
+      entity.addComponent(BoardCell, { cell });
+      entity.addComponent(RayInteractable);
+    }
 
     const setOpacity = (entity: Entity, opacity: number) => {
       const m = (entity.object3D as Mesh | undefined)?.material as MeshBasicMaterial | undefined;
@@ -426,12 +481,23 @@ export class BoardSystem extends createSystem({
         if (action === 0) this.restartLevel();
         else if (action === 1) this.nextLevel();
         else if (action === 2) this.openDaily();
+        else if (action === 3) this.toggleTraySide();
+        else if (action === 4) this.openMaker();
         else if (action === DESK_ACTION) this.findDesk();
-        else this.toggleTraySide();
+        else if (action === MAKER_ACTION) this.clearMaker();
+        else if (action === MAKER_ACTION + 1) this.toggleMoveLight();
+        else if (action === MAKER_ACTION + 2) this.shareMaker();
+        else this.closeMaker();
         playSnap();
       }),
       this.queries.buttonsHovered.subscribe('qualify', (entity) => setOpacity(entity, 0.14)),
       this.queries.buttonsHovered.subscribe('disqualify', (entity) => setOpacity(entity, 0)),
+      this.queries.cellsPressed.subscribe('qualify', (entity) => {
+        if (this.paused || !this.making) return;
+        this.tapMakerCell(entity.getValue(BoardCell, 'cell') ?? 0);
+      }),
+      this.queries.cellsHovered.subscribe('qualify', (entity) => setOpacity(entity, 0.14)),
+      this.queries.cellsHovered.subscribe('disqualify', (entity) => setOpacity(entity, 0)),
     );
   }
 
@@ -447,6 +513,13 @@ export class BoardSystem extends createSystem({
     panel.updateWorldMatrix(true, true);
     this.placeDeskCard(panel);
     this.deskCard?.object3D?.updateWorldMatrix(true, true);
+    // The maker bar takes the bar's place.
+    const makerCard = this.makerCard?.object3D;
+    if (makerCard) {
+      setWorldPosition(makerCard, panel.getWorldPosition(this.tmp));
+      setWorldQuaternion(makerCard, panel.getWorldQuaternion(this.q));
+      makerCard.updateWorldMatrix(true, true);
+    }
     this.buttonEls[0]!.getWorldPosition(this.a);
     this.buttonEls[bar - 1]!.getWorldPosition(this.b);
     if (this.a.distanceTo(this.b) < 0.01) return false;
@@ -455,7 +528,7 @@ export class BoardSystem extends createSystem({
       const action = entity.getValue(BoardButton, 'action') ?? 0;
       const el = this.buttonEls[action];
       if (!hit || !el) continue;
-      if (action === DESK_ACTION && !this.deskShown) {
+      if (!this.buttonShown(action)) {
         // Out of reach while the button is hidden, so no ray or finger can press it.
         hit.visible = false;
         hit.position.set(0, -10, 0);
@@ -562,6 +635,7 @@ export class BoardSystem extends createSystem({
     this.q.multiply(this.tilt);
     setWorldQuaternion(object, this.q);
     this.hitsPlaced = this.placeButtonHits();
+    this.placeCellTiles();
     const hint = this.hintCard?.object3D;
     if (hint) {
       this.c.set(0, 0.1, -(BOARD_SIZE_M / 2) - 0.05);
@@ -595,6 +669,137 @@ export class BoardSystem extends createSystem({
     }
   }
 
+  /** Which hit areas can be pressed: the bar or the maker bar, and Find my desk when offered. */
+  private buttonShown(action: number): boolean {
+    if (action < BUTTON_IDS.length) return !this.making;
+    if (action === DESK_ACTION) return this.deskShown;
+    return this.making;
+  }
+
+  /** Make: the puzzle you were making (or an empty board), the palette in the tray, and the maker bar. */
+  openMaker(restore: ReadonlyArray<SavedPiece | null> = []): void {
+    this.making = true;
+    this.draft = this.savedDraft() ?? emptyDraft();
+    this.loadMaker(restore);
+    this.showMakerPanels();
+  }
+
+  /** The draft kept in the save, checked like any share code. */
+  private savedDraft(): Draft | null {
+    const level = this.save.maker ? decodeLevel(this.save.maker) : null;
+    return level ? { emitter: level.emitter, crystals: level.crystals, blockers: level.blockers } : null;
+  }
+
+  /** Done: back to the chapter level you were on. */
+  closeMaker(): void {
+    this.making = false;
+    this.loadLevel(this.levelIndex, undefined, this.save.chapterPlaced);
+    this.showMakerPanels();
+  }
+
+  clearMaker(): void {
+    this.draft = emptyDraft();
+    this.loadMaker([]);
+  }
+
+  toggleMoveLight(): void {
+    this.moveArmed = !this.moveArmed;
+    this.showHint();
+  }
+
+  /** Share: once the maker has solved it, end the session and show the link page. */
+  shareMaker(): void {
+    const result = checkShare(this.draft, this.placed);
+    if (!result.ok) {
+      this.makerNote = result.reason;
+      this.showHint();
+      return;
+    }
+    const url = `${window.location.origin}${window.location.pathname}?p=${result.code}`;
+    const session = this.world.renderer.xr.getSession();
+    if (session) {
+      this.pendingShare = url;
+      session.end().catch(() => undefined);
+    } else {
+      showSharePage(url);
+    }
+  }
+
+  /** A pinch on a cell changes it, or moves the light there after Move light. */
+  private tapMakerCell(cell: number): void {
+    const col = Math.floor(cell / BOARD_SIZE);
+    const row = cell % BOARD_SIZE;
+    const next = this.moveArmed ? moveLight(this.draft, col, row) : tapCell(this.draft, col, row);
+    this.moveArmed = false;
+    if (next === this.draft) {
+      this.showHint();
+      return;
+    }
+    this.draft = next;
+    this.loadMaker(this.placed);
+    playSnap();
+  }
+
+  /** Put the draft on the board, keeping placed pieces on cells that are still free. */
+  private loadMaker(keep: ReadonlyArray<SavedPiece | null>): void {
+    this.makerSolved = false;
+    this.makerNote = null;
+    this.moveArmed = false;
+    const restore = PALETTE.map((_, i) => {
+      const p = keep[i];
+      return p ? { col: p.col, row: p.row, angle: p.angle } : null;
+    });
+    this.loadLevel(this.levelIndex, draftLevel(this.draft, PALETTE), restore);
+  }
+
+  /** The maker's caption: what to do next. */
+  private makerText(): string {
+    if (this.moveArmed) return 'Pinch an empty cell to move the light';
+    if (this.makerNote) return this.makerNote;
+    if (this.makerSolved) return 'Solved. Press Share to send it';
+    if (this.draft.crystals.length === 0) return 'Pinch cells to add blocks and crystals';
+    return 'Light every crystal with your pieces';
+  }
+
+  /** Swap the bar for the maker bar (or back), with the cells and tray to match. */
+  private showMakerPanels(): void {
+    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making;
+    if (this.makerCard?.object3D) this.makerCard.object3D.visible = !this.paused && this.making;
+    this.setTrayColumns(this.making ? 2 : 1);
+    this.hitsPlaced = this.placeButtonHits();
+    this.placeCellTiles();
+  }
+
+  /** The tray pad grows a second column for the maker's palette. */
+  private setTrayColumns(columns: number): void {
+    const pad = this.base.trayPad;
+    pad.scale.x = columns;
+    pad.position.x = this.traySide * (this.trayX + (columns - 1) * 0.0375);
+  }
+
+  /** Maker cells sit on the board top while making, and out of reach otherwise. */
+  private placeCellTiles(): void {
+    const root = this.base.root;
+    root.updateWorldMatrix(true, false);
+    root.getWorldQuaternion(this.q);
+    for (const entity of this.queries.cells.entities) {
+      const tile = entity.object3D;
+      if (!tile) continue;
+      tile.visible = this.making;
+      if (!this.making) {
+        tile.position.set(0, -10, 0);
+        continue;
+      }
+      const cell = entity.getValue(BoardCell, 'cell') ?? 0;
+      cellToLocal(BOARD_SIZE, Math.floor(cell / BOARD_SIZE), cell % BOARD_SIZE, this.tmp);
+      this.tmp.y = BOARD_TOP + 0.002;
+      root.localToWorld(this.tmp);
+      setWorldPosition(tile, this.tmp);
+      setWorldQuaternion(tile, this.q);
+      tile.scale.set(CELL * 0.94, 0.004, CELL * 0.94);
+    }
+  }
+
   /** The Find my desk card sits in the bar's row, just left of it, at the same tilt. */
   private placeDeskCard(panel: Object3D): void {
     const card = this.deskCard?.object3D;
@@ -618,6 +823,7 @@ export class BoardSystem extends createSystem({
     const show =
       canScan &&
       this.desk.settled &&
+      !this.making &&
       !this.onDesk &&
       !this.deskRestored &&
       !this.roomScanUsed &&
@@ -674,10 +880,11 @@ export class BoardSystem extends createSystem({
       }
     }
     if (card) card.visible = this.paused;
-    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused;
+    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making;
+    if (this.makerCard?.object3D) this.makerCard.object3D.visible = !this.paused && this.making;
     if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
     for (const hit of this.queries.buttons.entities) {
-      const shown = hit.getValue(BoardButton, 'action') !== DESK_ACTION || this.deskShown;
+      const shown = this.buttonShown(hit.getValue(BoardButton, 'action') ?? 0);
       if (hit.object3D) hit.object3D.visible = shown && !this.paused;
     }
     this.showHint();
@@ -1093,7 +1300,7 @@ export class BoardSystem extends createSystem({
         changed = true;
       }
     }
-    if (changed) this.grid = trace(this.level, this.effective, this.palmCells);
+    if (changed) this.grid = trace(this.level, this.effective, this.making ? NO_PALMS : this.palmCells);
     const grid = this.grid!;
 
     // Light in the air follows the palms every frame.
@@ -1167,7 +1374,19 @@ export class BoardSystem extends createSystem({
       this.litMask = shownLit;
       this.skyMask = shownSky;
       const allSky = this.skyTargets.length === 0 || sky === (1 << this.skyTargets.length) - 1;
-      if (grid.solved && allSky) {
+      if (this.making) {
+        // The maker's own solve: ready to share, and the board stays as it is.
+        if (!grid.solved) this.solvedSince = -1;
+        else if (this.solvedSince < 0) this.solvedSince = time;
+        // With no crystals every crystal is lit, which is not a puzzle yet.
+        const ready = grid.solved && this.level.crystals.length > 0 && time - this.solvedSince >= SOLVE_HOLD;
+        if (ready !== this.makerSolved) {
+          this.makerSolved = ready;
+          this.makerNote = null;
+          if (ready) playSolved();
+          this.showHint();
+        }
+      } else if (grid.solved && allSky) {
         if (this.solvedSince < 0) this.solvedSince = time;
         if (time - this.solvedSince >= SOLVE_HOLD) this.complete(time);
       } else {

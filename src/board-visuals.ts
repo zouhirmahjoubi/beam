@@ -151,8 +151,10 @@ export function cellToLocal(size: number, col: number, row: number, out: Vector3
 
 /** Local position of tray slot `i`, beside the board on `side` (1 right, -1 left). */
 export function traySlot(size: number, i: number, out: Vector3, side = 1): Vector3 {
-  const x = side * ((size * CELL) / 2 + RIM + 0.05);
-  const z = (i - (TRAY_SLOTS - 1) / 2) * 0.075;
+  // Past three pieces (the maker's palette), slots fill a second column further out.
+  const column = Math.floor(i / TRAY_SLOTS);
+  const x = side * ((size * CELL) / 2 + RIM + 0.05 + column * 0.075);
+  const z = ((i % TRAY_SLOTS) - (TRAY_SLOTS - 1) / 2) * 0.075;
   return out.set(x, BOARD_TOP, z);
 }
 

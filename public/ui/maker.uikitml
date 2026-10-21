@@ -1,0 +1,45 @@
+<!--
+  Puzzle maker bar: takes the place of the board controls while a puzzle is
+  being made. Works by fingertip press or point/look and pinch, like the bar.
+-->
+<style>
+  .bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .button-label {
+    transform-translate-y: 1px;
+  }
+</style>
+<Panel id="maker-bar" class="bar">
+  <Button id="maker-clear">
+    <ButtonIcon>
+      <Eraser></Eraser>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Clear</ButtonLabel>
+  </Button>
+  <Button id="maker-move">
+    <ButtonIcon>
+      <Move></Move>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Move light</ButtonLabel>
+  </Button>
+  <Button id="maker-share">
+    <ButtonIcon>
+      <Share2></Share2>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Share</ButtonLabel>
+  </Button>
+  <Button id="maker-done">
+    <ButtonIcon>
+      <Check></Check>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Done</ButtonLabel>
+  </Button>
+</Panel>
