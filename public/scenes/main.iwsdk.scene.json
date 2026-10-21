@@ -138,6 +138,28 @@
         "scale": 0.1
       },
       "components": {}
+    },
+    {
+      "id": "desk-panel",
+      "name": "Find My Desk",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "desk-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.1
+      },
+      "components": {}
     }
   ]
 }

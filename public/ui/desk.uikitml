@@ -1,0 +1,26 @@
+<!--
+  Shown beside the board when no desk was found: starts the headset's room
+  scan (Space Setup) so the board can sit on the real desk.
+-->
+<style>
+  .bar {
+    flex-direction: row;
+    align-items: center;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .button-label {
+    transform-translate-y: 1px;
+  }
+</style>
+<Panel id="desk-bar" class="bar">
+  <Button id="desk-button">
+    <ButtonIcon>
+      <ScanLine></ScanLine>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Find my desk</ButtonLabel>
+  </Button>
+</Panel>

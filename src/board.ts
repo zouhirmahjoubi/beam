@@ -110,8 +110,20 @@ const LIT_HOLD = 0.15;
 const SNAP_HYSTERESIS = 0.15;
 /** The eyes are tracked once the head is above this height (the first frames read zero). */
 const MIN_EYE_HEIGHT = 0.3;
+/** Meta's guidance: wait this long for surfaces before offering a room scan. */
+const ROOM_SCAN_DELAY = 3;
+/** Action index of the Find my desk button (after the four bar buttons). */
+const DESK_ACTION = 4;
+/** Space between the bar and the Find my desk card, in meters. */
+const DESK_CARD_GAP = 0.012;
 /** The caption floats above the far edge, tilted toward the player. */
 const HINT_TILT = -0.42;
+
+/** A laid-out UIKit element; its size and position signals change on every relayout. */
+type UiElement = Object3D & {
+  size: { subscribe(fn: () => void): () => void };
+  relativeCenter: { subscribe(fn: () => void): () => void };
+};
 
 interface NativePlane {
   orientation?: string;
@@ -216,13 +228,19 @@ export class BoardSystem extends createSystem({
   private pauseCard: Entity | undefined;
   private handLabel: { setProperties(p: { text: string }): void } | undefined;
   private tilt = new Quaternion();
-  private buttonEls: Array<{ getWorldPosition(v: Vector3): Vector3 } | undefined> = [];
+  private buttonEls: Array<UiElement | undefined> = [];
+  private barEl: UiElement | undefined;
+  private deskBarEl: UiElement | undefined;
   private hitsPlaced = false;
   private c = new Vector3();
   private xAxis = new Vector3(1, 0, 0);
 
   private placeUntil = 0;
   private seated = false;
+  private sessionAt = 0;
+  private roomScanUsed = false;
+  private deskCard: Entity | undefined;
+  private deskShown = false;
   private planeArrived = false;
   private placeRequested = true;
   private touched = false;
@@ -339,6 +357,8 @@ export class BoardSystem extends createSystem({
     this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
     this.dailyLabel = panel?.getElementById('daily-label') as typeof this.dailyLabel;
     this.dailyLabel?.setProperties({ text: this.dailyText() });
+    this.deskCard = this.world.getSceneEntity('desk-panel');
+    if (this.deskCard?.object3D) this.deskCard.object3D.visible = false;
     this.hintCard = this.world.getSceneEntity('hint-panel');
     const hint = this.world.getSceneObject<UIKitMLAsset>('hint-panel');
     this.hintText = hint?.getElementById('hint-text') as typeof this.hintText;
@@ -347,8 +367,20 @@ export class BoardSystem extends createSystem({
 
     // Each button gets its own hit area entity in world space. They are
     // placed once the panel has been laid out (see placeButtonHits).
-    this.buttonEls = BUTTON_IDS.map((id) => panel.getElementById(id) ?? undefined);
-    BUTTON_IDS.forEach((_, action) => {
+    const el = (asset: UIKitMLAsset | undefined, id: string) => (asset?.getElementById(id) ?? undefined) as UiElement | undefined;
+    const desk = this.world.getSceneObject<UIKitMLAsset>('desk-panel');
+    this.buttonEls = BUTTON_IDS.map((id) => el(panel, id));
+    this.buttonEls[DESK_ACTION] = el(desk, 'desk-button');
+    this.barEl = el(panel, 'bar');
+    this.deskBarEl = el(desk, 'desk-bar');
+    // A label change (Daily 3, Tray right) lays the bar out again: re-place the hits.
+    const relayout = () => {
+      this.hitsPlaced = false;
+    };
+    for (const e of [...this.buttonEls, this.barEl, this.deskBarEl]) {
+      if (e) this.cleanupFuncs.push(e.size.subscribe(relayout), e.relativeCenter.subscribe(relayout));
+    }
+    [...BUTTON_IDS, 'desk-button'].forEach((_, action) => {
       const hit = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
       const entity = this.world.createTransformEntity(hit);
       entity.addComponent(BoardButton, { action });
@@ -367,6 +399,7 @@ export class BoardSystem extends createSystem({
         if (action === 0) this.restartLevel();
         else if (action === 1) this.nextLevel();
         else if (action === 2) this.openDaily();
+        else if (action === DESK_ACTION) this.findDesk();
         else this.toggleTraySide();
         playSnap();
       }),
@@ -382,23 +415,34 @@ export class BoardSystem extends createSystem({
    */
   private placeButtonHits(): boolean {
     const panel = this.controls?.object3D;
-    if (!panel || this.queries.buttons.entities.size === 0 || this.buttonEls.some((el) => !el)) return false;
+    const bar = BUTTON_IDS.length;
+    if (!panel || this.queries.buttons.entities.size === 0 || this.buttonEls.slice(0, bar).some((el) => !el)) return false;
     panel.updateWorldMatrix(true, true);
-    const first = this.buttonEls[0]!.getWorldPosition(this.a).clone();
-    const last = this.buttonEls[this.buttonEls.length - 1]!.getWorldPosition(this.b);
-    const span = first.distanceTo(last);
-    if (span < 0.01) return false;
-    const pitch = span / (this.buttonEls.length - 1);
-    panel.getWorldQuaternion(this.q);
-    this.c.set(0, 0, 1).applyQuaternion(this.q);
+    this.placeDeskCard(panel);
+    this.deskCard?.object3D?.updateWorldMatrix(true, true);
+    this.buttonEls[0]!.getWorldPosition(this.a);
+    this.buttonEls[bar - 1]!.getWorldPosition(this.b);
+    if (this.a.distanceTo(this.b) < 0.01) return false;
     for (const entity of this.queries.buttons.entities) {
       const hit = entity.object3D;
-      const el = this.buttonEls[entity.getValue(BoardButton, 'action') ?? 0];
+      const action = entity.getValue(BoardButton, 'action') ?? 0;
+      const el = this.buttonEls[action];
       if (!hit || !el) continue;
+      if (action === DESK_ACTION && !this.deskShown) {
+        // Out of reach while the button is hidden, so no ray or finger can press it.
+        hit.visible = false;
+        hit.position.set(0, -10, 0);
+        continue;
+      }
+      hit.visible = !this.paused;
+      el.getWorldQuaternion(this.q);
+      this.c.set(0, 0, 1).applyQuaternion(this.q);
       el.getWorldPosition(this.tmp).addScaledVector(this.c, 0.004);
       setWorldPosition(hit, this.tmp);
       setWorldQuaternion(hit, this.q);
-      hit.scale.set(pitch * 0.92, 0.046, 0.01);
+      // UIKit scales each element to its laid-out size, so the hit matches its button.
+      el.getWorldScale(this.b);
+      hit.scale.set(this.b.x, this.b.y + 0.002, 0.01);
     }
     return true;
   }
@@ -524,6 +568,54 @@ export class BoardSystem extends createSystem({
     }
   }
 
+  /** The Find my desk card sits in the bar's row, just left of it, at the same tilt. */
+  private placeDeskCard(panel: Object3D): void {
+    const card = this.deskCard?.object3D;
+    if (!card || !this.barEl || !this.deskBarEl) return;
+    // UIKit scales each element to its laid-out size, so world scale x is its width.
+    const half = (this.barEl.getWorldScale(this.b).x + this.deskBarEl.getWorldScale(this.b).x) / 2;
+    panel.getWorldQuaternion(this.q);
+    this.c.set(1, 0, 0).applyQuaternion(this.q);
+    panel.getWorldPosition(this.tmp).addScaledVector(this.c, -half - DESK_CARD_GAP);
+    setWorldPosition(card, this.tmp);
+    setWorldQuaternion(card, this.q);
+  }
+
+  /**
+   * Find my desk: when no desk turned up a few seconds into the session, offer
+   * the headset's room scan. Allowed once per session by the browser.
+   */
+  private updateDeskButton(time: number): void {
+    const session = this.immersive ? this.world.renderer.xr.getSession() : null;
+    const canScan = !!session && typeof (session as unknown as { initiateRoomCapture?: unknown }).initiateRoomCapture === 'function';
+    const show =
+      canScan &&
+      this.desk.settled &&
+      !this.onDesk &&
+      !this.deskRestored &&
+      !this.roomScanUsed &&
+      !this.paused &&
+      time - this.sessionAt >= ROOM_SCAN_DELAY;
+    if (show === this.deskShown) return;
+    this.deskShown = show;
+    if (this.deskCard?.object3D) this.deskCard.object3D.visible = show;
+    this.hitsPlaced = this.placeButtonHits();
+  }
+
+  /** Start the room scan; the board re-seats when the new surfaces arrive. */
+  findDesk(): void {
+    const session = this.world.renderer.xr.getSession() as unknown as { initiateRoomCapture?: () => Promise<unknown> } | null;
+    if (!session?.initiateRoomCapture || this.roomScanUsed) return;
+    this.roomScanUsed = true;
+    this.updateDeskButton(this.now);
+    const reseat = () => {
+      this.placeUntil = this.now + PLACEMENT_WINDOW * 3;
+      this.seated = false;
+      this.touched = false;
+    };
+    Promise.resolve(session.initiateRoomCapture()).then(reseat, reseat);
+  }
+
   /** Hands only: any active controller pauses play until both are put down. */
   private updatePause(): void {
     const adapters = (this.input.xr as unknown as {
@@ -557,7 +649,10 @@ export class BoardSystem extends createSystem({
     if (card) card.visible = this.paused;
     if (this.controls?.object3D) this.controls.object3D.visible = !this.paused;
     if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
-    for (const hit of this.queries.buttons.entities) if (hit.object3D) hit.object3D.visible = !this.paused;
+    for (const hit of this.queries.buttons.entities) {
+      const shown = hit.getValue(BoardButton, 'action') !== DESK_ACTION || this.deskShown;
+      if (hit.object3D) hit.object3D.visible = shown && !this.paused;
+    }
     this.showHint();
   }
 
@@ -660,6 +755,8 @@ export class BoardSystem extends createSystem({
       this.placeUntil = time + PLACEMENT_WINDOW;
       this.seated = false;
       this.touched = false;
+      this.sessionAt = time;
+      this.roomScanUsed = false;
       this.desk.reset();
       this.deskRestored = this.deskSaved = false;
     }
@@ -672,6 +769,7 @@ export class BoardSystem extends createSystem({
       }
     }
     if (this.immersive) this.rememberDesk(time);
+    this.updateDeskButton(time);
 
     this.hands.update(this.input.xr as unknown as HandSource, this.player.gripSpaces, this.base.root);
     if (!this.hitsPlaced) this.hitsPlaced = this.placeButtonHits();

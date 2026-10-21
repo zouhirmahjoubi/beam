@@ -25,6 +25,11 @@ export default defineAssets({
     type: AssetType.UIKitML,
     name: 'Pause Panel',
   },
+  'desk-panel': {
+    url: publicAssetUrl('ui/desk.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Find My Desk',
+  },
   'hint-panel': {
     url: publicAssetUrl('ui/hint.uikitml'),
     type: AssetType.UIKitML,
