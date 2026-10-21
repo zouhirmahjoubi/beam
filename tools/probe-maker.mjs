@@ -33,7 +33,7 @@ export default async function run({ page, frame }) {
       // Tiles are created in cell order.
       const tiles = [...b.queries.cells.entities];
       const ids = ['make-button', 'maker-clear', 'maker-move', 'maker-share', 'maker-done'];
-      const els = [b.buttonEls[4], ...b.buttonEls.slice(6, 10)];
+      const els = [b.buttonEls[4], ...b.buttonEls.slice(7, 11)];
       const buttons = Object.fromEntries(ids.map((id, i) => [id, els[i] ? at(els[i]) : null]));
       const pageEl = document.getElementById('share-page');
       return {

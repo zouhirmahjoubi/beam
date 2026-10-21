@@ -30,6 +30,11 @@ export default defineAssets({
     type: AssetType.UIKitML,
     name: 'Puzzle Maker Bar',
   },
+  'settings-panel': {
+    url: publicAssetUrl('ui/settings.uikitml'),
+    type: AssetType.UIKitML,
+    name: 'Settings Bar',
+  },
   'desk-panel': {
     url: publicAssetUrl('ui/desk.uikitml'),
     type: AssetType.UIKitML,

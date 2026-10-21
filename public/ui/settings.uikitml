@@ -1,0 +1,51 @@
+<!--
+  Settings bar: takes the bar's place while open. Tray side, one-hand mode,
+  reduced motion and high contrast, each label showing its state.
+-->
+<style>
+  .bar {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .button-label {
+    transform-translate-y: 1px;
+  }
+</style>
+<Panel id="settings-bar" class="bar">
+  <Button id="settings-tray">
+    <ButtonIcon>
+      <Hand></Hand>
+    </ButtonIcon>
+    <ButtonLabel id="settings-tray-label" class="button-label">Tray left</ButtonLabel>
+  </Button>
+  <Button id="settings-onehand">
+    <ButtonIcon>
+      <Accessibility></Accessibility>
+    </ButtonIcon>
+    <ButtonLabel id="settings-onehand-label" class="button-label">One hand off</ButtonLabel>
+  </Button>
+  <Button id="settings-motion">
+    <ButtonIcon>
+      <Eye></Eye>
+    </ButtonIcon>
+    <ButtonLabel id="settings-motion-label" class="button-label">Less motion off</ButtonLabel>
+  </Button>
+  <Button id="settings-contrast">
+    <ButtonIcon>
+      <Contrast></Contrast>
+    </ButtonIcon>
+    <ButtonLabel id="settings-contrast-label" class="button-label">Contrast off</ButtonLabel>
+  </Button>
+  <Button id="settings-back">
+    <ButtonIcon>
+      <ArrowLeft></ArrowLeft>
+    </ButtonIcon>
+    <ButtonLabel class="button-label">Back</ButtonLabel>
+  </Button>
+</Panel>

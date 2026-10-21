@@ -30,6 +30,12 @@
     </ButtonIcon>
     <ButtonLabel class="button-label">Next</ButtonLabel>
   </Button>
+  <Button id="hint-button">
+    <ButtonIcon>
+      <Lightbulb></Lightbulb>
+    </ButtonIcon>
+    <ButtonLabel id="hint-label" class="button-label">Hint 3</ButtonLabel>
+  </Button>
   <Button id="daily-button">
     <ButtonIcon>
       <CalendarDays></CalendarDays>
@@ -42,10 +48,10 @@
     </ButtonIcon>
     <ButtonLabel class="button-label">Make</ButtonLabel>
   </Button>
-  <Button id="hand-button">
+  <Button id="settings-button">
     <ButtonIcon>
-      <Hand></Hand>
+      <Settings></Settings>
     </ButtonIcon>
-    <ButtonLabel id="hand-label" class="button-label">Tray left</ButtonLabel>
+    <ButtonLabel class="button-label">Settings</ButtonLabel>
   </Button>
 </Panel>

@@ -52,11 +52,12 @@ import {
   type TraceResult,
   type TrayPiece,
 } from './game/grid.js';
-import { Coach } from './coach.js';
+import { buildGhostHand, Coach, PALM_DOWN, type GhostHand } from './coach.js';
 import { DeskAnchor, type FrameLike } from './desk-anchor.js';
 import { generateDaily } from './game/daily.js';
 import { LEVELS } from './game/levels.js';
 import { checkShare, draftLevel, emptyDraft, moveLight, tapCell, type Draft } from './game/maker.js';
+import { dailyCard } from './game/daily-card.js';
 import { decodeLevel, encodeLevel } from './game/share.js';
 import { solve } from './game/solver.js';
 import {
@@ -67,6 +68,7 @@ import {
   saveProgress,
   type SaveData,
   type SavedPiece,
+  type Settings,
 } from './progress.js';
 import { apertureVector, freeBuffer, freeTrace, type FreeResult, type PalmDisc, type SkyTarget, type V3 } from './game/optics.js';
 import { pointInPolygon } from './placement.js';
@@ -91,10 +93,23 @@ const LIFT_TILT = 0.35;
 const CONTROLS_TILT = -Math.PI * 0.32;
 /** Hit area for one board button, in meters; resized from the button layout. */
 const BUTTON_HIT_GEOMETRY = new BoxGeometry(1, 1, 1);
-const BUTTON_IDS = ['restart-button', 'next-button', 'daily-button', 'hand-button', 'make-button'];
+const BUTTON_IDS = ['restart-button', 'next-button', 'daily-button', 'settings-button', 'make-button', 'hint-button'];
+/** Hints per level: each one plays the next move of the answer right away. */
+const HINTS_PER_LEVEL = 3;
+/** The settings bar's buttons; their actions follow the maker bar. */
+const SETTINGS_IDS = ['settings-tray', 'settings-onehand', 'settings-motion', 'settings-contrast', 'settings-back'];
+const SETTINGS_ACTION = 11;
+/** One-hand mode: a palm held still in the beam this long stays there as a pinned mirror. */
+const PIN_DWELL = 1.4;
+const PIN_SLOTS = 2;
+const PIN_OPACITY = 0.3;
+const PIN_HIT_OPACITY = 0.55;
+/** High contrast: beams this many times wider, and glows this much stronger. */
+const CONTRAST_WIDTH = 1.8;
+const CONTRAST_GLOW = 2;
 /** The maker bar's buttons; their actions follow the Find my desk button. */
 const MAKER_IDS = ['maker-clear', 'maker-move', 'maker-share', 'maker-done'];
-const MAKER_ACTION = 6;
+const MAKER_ACTION = 7;
 /** The maker's tray: every piece a made puzzle can use. */
 const PALETTE: TrayPiece[] = [
   { kind: 'mirror' },
@@ -131,8 +146,8 @@ const SNAP_HYSTERESIS = 0.15;
 const MIN_EYE_HEIGHT = 0.3;
 /** Meta's guidance: wait this long for surfaces before offering a room scan. */
 const ROOM_SCAN_DELAY = 3;
-/** Action index of the Find my desk button (after the five bar buttons). */
-const DESK_ACTION = 5;
+/** Action index of the Find my desk button (after the six bar buttons). */
+const DESK_ACTION = 6;
 /** Space between the bar and the Find my desk card, in meters. */
 const DESK_CARD_GAP = 0.012;
 /** The caption floats above the far edge, tilted toward the player. */
@@ -185,17 +200,30 @@ export class BoardSystem extends createSystem({
   private pendingSnap = 0;
 
   private hands = new PalmReader();
-  private palmCells: Array<PalmCell | null> = [null, null];
-  private palmCellStore: PalmCell[] = [
-    { col: 0, row: 0, nx: 0, nz: 0, lift: false },
-    { col: 0, row: 0, nx: 0, nz: 0, lift: false },
-  ];
-  private palmDiscs: Array<PalmDisc | null> = [null, null];
-  private palmDiscStore: PalmDisc[] = [
-    { center: [0, 0, 0], normal: [0, 1, 0], radius: PALM_RADIUS },
-    { center: [0, 0, 0], normal: [0, 1, 0], radius: PALM_RADIUS },
-  ];
-  private palmSig = new Int32Array(2).fill(-2);
+  /** Palm slots: the two live hands, then the pinned palms of one-hand mode. */
+  private palmCells: Array<PalmCell | null> = [null, null, null, null];
+  private palmCellStore: PalmCell[] = Array.from({ length: 2 + PIN_SLOTS }, () => ({ col: 0, row: 0, nx: 0, nz: 0, lift: false }));
+  private palmDiscs: Array<PalmDisc | null> = [null, null, null, null];
+  private palmDiscStore: PalmDisc[] = Array.from({ length: 2 + PIN_SLOTS }, () => ({ center: [0, 0, 0], normal: [0, 1, 0], radius: PALM_RADIUS }));
+  private palmSig = new Int32Array(2 + PIN_SLOTS).fill(-2);
+  /** Pinned palms, as board-local poses; null slots are free. */
+  pins: Array<{ center: Vector3; normal: Vector3; at: number; armed: boolean } | null> = [null, null];
+  private pinStore = Array.from({ length: PIN_SLOTS }, () => ({ center: new Vector3(), normal: new Vector3(), at: 0, armed: false }));
+  pinGhosts: GhostHand[] = [];
+  /** When each live palm's pose last changed, for the pin dwell. */
+  private pinSince = [-1, -1];
+  settings: Settings = { oneHand: false, reducedMotion: null, highContrast: false };
+  hintsLeft = HINTS_PER_LEVEL;
+  private hintLabel: { setProperties(p: { text: string }): void } | undefined;
+  /** Palm slots that touched the beam on the last trace, for the daily card. */
+  private palmsInAnswer = 0;
+  private settingsCard: Entity | undefined;
+  private settingsOpen = false;
+  private settingsLabelEls: Record<string, { setProperties(p: { text: string }): void } | undefined> = {};
+  /** 1 normally, 0 with reduced motion: scales every decorative pulse. */
+  private motion = 1;
+  private contrast = false;
+  private glowBase: number[] = [];
   private skyTargets: SkyTarget[] = [];
 
   private grid: TraceResult | null = null;
@@ -324,13 +352,24 @@ export class BoardSystem extends createSystem({
         if (immersive !== this.immersive) this.placeRequested = true;
         this.immersive = immersive;
         if (!immersive && this.pendingShare) {
-          showSharePage(this.pendingShare);
+          const base = `${window.location.origin}${window.location.pathname}`;
+          if (this.pendingShare.startsWith(base)) showSharePage(this.pendingShare);
+          else showSharePage(base, this.pendingShare);
           this.pendingShare = null;
         }
       }),
     );
     this.coach = new Coach(this.base.root);
+    for (let i = 0; i < PIN_SLOTS; i++) {
+      const ghost = buildGhostHand();
+      ghost.material.color.setHex(0xfff2c4);
+      this.base.root.add(ghost.root);
+      this.pinGhosts.push(ghost);
+    }
+    this.glowBase = [0, 1, 2].map((c) => beamMats[c as Color][1].opacity);
     this.save = loadProgress(LEVELS[0].id);
+    this.settings = this.save.settings;
+    this.applySettings();
     this.traySide = this.save.traySide;
     this.trayX = Math.abs(this.base.trayPad.position.x);
     this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
@@ -401,9 +440,47 @@ export class BoardSystem extends createSystem({
   }
 
   /** Label for the Daily button: the streak, once there is one. */
-  private dailyText(): string {
+  dailyText(): string {
     const streak = currentStreak(this.save.daily, dayKey());
+    if (this.dailyDone()) return `Share ${streak}`;
     return streak > 0 ? `Daily ${streak}` : 'Daily';
+  }
+
+  /** Whether today's puzzle is already solved. */
+  private dailyDone(): boolean {
+    return this.save.daily.lastSolved === dayKey();
+  }
+
+  /** Label for the Hint button: how many are left on this level. */
+  hintLabelText(): string {
+    return this.hintsLeft > 0 ? `Hint ${this.hintsLeft}` : 'No hints';
+  }
+
+  /** Play the next move of the answer now, three times per level. */
+  hint(): void {
+    if (this.hintsLeft <= 0 || this.solved) return;
+    this.hintsLeft -= 1;
+    this.hintLabel?.setProperties({ text: this.hintLabelText() });
+    this.coach.play(this.now);
+  }
+
+  /** The daily result as a card on the share page; the session ends to show it. */
+  private shareDaily(): void {
+    const text = dailyCard({
+      day: this.save.daily.lastSolved ?? dayKey(),
+      crystals: this.save.daily.crystals,
+      pieces: this.save.daily.pieces,
+      palms: this.save.daily.palms,
+      streak: currentStreak(this.save.daily, dayKey()),
+      url: `${window.location.origin}${window.location.pathname}`,
+    });
+    const session = this.world.renderer.xr.getSession();
+    if (session) {
+      this.pendingShare = text;
+      session.end().catch(() => undefined);
+    } else {
+      showSharePage(`${window.location.origin}${window.location.pathname}`, text);
+    }
   }
 
   /**
@@ -421,10 +498,10 @@ export class BoardSystem extends createSystem({
     this.setFrameTimeReadout(new URLSearchParams(window.location.search).get('fps') === '1');
     this.cleanupFuncs.push(() => this.setFrameTimeReadout(false));
     const panel = this.world.getSceneObject<UIKitMLAsset>('board-controls');
-    this.handLabel = panel?.getElementById('hand-label') as typeof this.handLabel;
-    this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
     this.dailyLabel = panel?.getElementById('daily-label') as typeof this.dailyLabel;
     this.dailyLabel?.setProperties({ text: this.dailyText() });
+    this.hintLabel = panel?.getElementById('hint-label') as typeof this.hintLabel;
+    this.hintLabel?.setProperties({ text: this.hintLabelText() });
     this.deskCard = this.world.getSceneEntity('desk-panel');
     if (this.deskCard?.object3D) this.deskCard.object3D.visible = false;
     this.hintCard = this.world.getSceneEntity('hint-panel');
@@ -441,6 +518,14 @@ export class BoardSystem extends createSystem({
     this.buttonEls[DESK_ACTION] = el(desk, 'desk-button');
     this.barEl = el(panel, 'bar');
     this.deskBarEl = el(desk, 'desk-bar');
+    this.settingsCard = this.world.getSceneEntity('settings-panel');
+    if (this.settingsCard?.object3D) this.settingsCard.object3D.visible = false;
+    const settingsPanel = this.world.getSceneObject<UIKitMLAsset>('settings-panel');
+    SETTINGS_IDS.forEach((id, i) => (this.buttonEls[SETTINGS_ACTION + i] = el(settingsPanel, id)));
+    for (const key of ['tray', 'onehand', 'motion', 'contrast']) {
+      this.settingsLabelEls[key] = settingsPanel?.getElementById(`settings-${key}-label`) as typeof this.handLabel;
+    }
+    this.refreshSettingsLabels();
     this.makerCard = this.world.getSceneEntity('maker-panel');
     if (this.makerCard?.object3D) this.makerCard.object3D.visible = false;
     const maker = this.world.getSceneObject<UIKitMLAsset>('maker-panel');
@@ -452,7 +537,7 @@ export class BoardSystem extends createSystem({
     for (const e of [...this.buttonEls, this.barEl, this.deskBarEl]) {
       if (e) this.cleanupFuncs.push(e.size.subscribe(relayout), e.relativeCenter.subscribe(relayout));
     }
-    [...BUTTON_IDS, 'desk-button', ...MAKER_IDS].forEach((_, action) => {
+    [...BUTTON_IDS, 'desk-button', ...MAKER_IDS, ...SETTINGS_IDS].forEach((_, action) => {
       const hit = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
       const entity = this.world.createTransformEntity(hit);
       entity.addComponent(BoardButton, { action });
@@ -481,13 +566,19 @@ export class BoardSystem extends createSystem({
         if (action === 0) this.restartLevel();
         else if (action === 1) this.nextLevel();
         else if (action === 2) this.openDaily();
-        else if (action === 3) this.toggleTraySide();
+        else if (action === 3) this.openSettings();
         else if (action === 4) this.openMaker();
+        else if (action === 5) this.hint();
         else if (action === DESK_ACTION) this.findDesk();
         else if (action === MAKER_ACTION) this.clearMaker();
         else if (action === MAKER_ACTION + 1) this.toggleMoveLight();
         else if (action === MAKER_ACTION + 2) this.shareMaker();
-        else this.closeMaker();
+        else if (action === MAKER_ACTION + 3) this.closeMaker();
+        else if (action === SETTINGS_ACTION) this.toggleTraySide();
+        else if (action === SETTINGS_ACTION + 1) this.setSetting('oneHand', !this.settings.oneHand);
+        else if (action === SETTINGS_ACTION + 2) this.setSetting('reducedMotion', !this.reducedMotion());
+        else if (action === SETTINGS_ACTION + 3) this.setSetting('highContrast', !this.settings.highContrast);
+        else this.closeSettings();
         playSnap();
       }),
       this.queries.buttonsHovered.subscribe('qualify', (entity) => setOpacity(entity, 0.14)),
@@ -513,12 +604,12 @@ export class BoardSystem extends createSystem({
     panel.updateWorldMatrix(true, true);
     this.placeDeskCard(panel);
     this.deskCard?.object3D?.updateWorldMatrix(true, true);
-    // The maker bar takes the bar's place.
-    const makerCard = this.makerCard?.object3D;
-    if (makerCard) {
-      setWorldPosition(makerCard, panel.getWorldPosition(this.tmp));
-      setWorldQuaternion(makerCard, panel.getWorldQuaternion(this.q));
-      makerCard.updateWorldMatrix(true, true);
+    // The maker bar and the settings bar take the bar's place.
+    for (const card of [this.makerCard?.object3D, this.settingsCard?.object3D]) {
+      if (!card) continue;
+      setWorldPosition(card, panel.getWorldPosition(this.tmp));
+      setWorldQuaternion(card, panel.getWorldQuaternion(this.q));
+      card.updateWorldMatrix(true, true);
     }
     this.buttonEls[0]!.getWorldPosition(this.a);
     this.buttonEls[bar - 1]!.getWorldPosition(this.b);
@@ -609,6 +700,10 @@ export class BoardSystem extends createSystem({
 
   /** Today's puzzle, the same for every player on the same day. */
   openDaily(): void {
+    if (this.dailyDone()) {
+      this.shareDaily();
+      return;
+    }
     this.loadLevel(this.levelIndex, this.dailyLevel());
     this.seatPieces();
   }
@@ -617,7 +712,7 @@ export class BoardSystem extends createSystem({
   toggleTraySide(): void {
     this.traySide = -this.traySide;
     this.base.trayPad.position.x = Math.abs(this.base.trayPad.position.x) * this.traySide;
-    this.handLabel?.setProperties({ text: this.traySide > 0 ? 'Tray left' : 'Tray right' });
+    this.refreshSettingsLabels();
     this.seatPieces();
     this.persist();
   }
@@ -671,14 +766,100 @@ export class BoardSystem extends createSystem({
 
   /** Which hit areas can be pressed: the bar or the maker bar, and Find my desk when offered. */
   private buttonShown(action: number): boolean {
-    if (action < BUTTON_IDS.length) return !this.making;
+    if (action < BUTTON_IDS.length) return !this.making && !this.settingsOpen;
     if (action === DESK_ACTION) return this.deskShown;
+    if (action >= SETTINGS_ACTION) return this.settingsOpen;
     return this.making;
+  }
+
+  openSettings(): void {
+    this.settingsOpen = true;
+    this.refreshSettingsLabels();
+    this.showMakerPanels();
+  }
+
+  closeSettings(): void {
+    this.settingsOpen = false;
+    this.showMakerPanels();
+  }
+
+  /** Change one setting, apply it, and save. */
+  setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
+    this.settings[key] = value;
+    this.applySettings();
+    this.refreshSettingsLabels();
+    this.persist();
+  }
+
+  /** Reduced motion as it applies now: the setting, or the system preference. */
+  private reducedMotion(): boolean {
+    return this.settings.reducedMotion ?? (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  private applySettings(): void {
+    const reduced = this.reducedMotion();
+    this.coach.reducedMotion = reduced;
+    this.motion = reduced ? 0 : 1;
+    this.contrast = this.settings.highContrast;
+    for (let c = 0; c < 3; c++) {
+      beamMats[c as Color][1].opacity = Math.min(0.9, this.glowBase[c] * (this.contrast ? CONTRAST_GLOW : 1));
+    }
+    if (!this.settings.oneHand) this.clearPins();
+    // Beams take their width on the next draw.
+    this.grid = null;
+  }
+
+  /** The settings bar's labels, each showing its state. */
+  settingsLabels(): Record<string, string> {
+    return {
+      tray: this.traySide > 0 ? 'Tray left' : 'Tray right',
+      oneHand: this.settings.oneHand ? 'One hand on' : 'One hand off',
+      motion: this.reducedMotion() ? 'Less motion on' : 'Less motion off',
+      contrast: this.settings.highContrast ? 'Contrast on' : 'Contrast off',
+    };
+  }
+
+  private refreshSettingsLabels(): void {
+    const labels = this.settingsLabels();
+    this.settingsLabelEls.tray?.setProperties({ text: labels.tray });
+    this.settingsLabelEls.onehand?.setProperties({ text: labels.oneHand });
+    this.settingsLabelEls.motion?.setProperties({ text: labels.motion });
+    this.settingsLabelEls.contrast?.setProperties({ text: labels.contrast });
+  }
+
+  /** Forget every pinned palm. */
+  private clearPins(): void {
+    for (let i = 0; i < PIN_SLOTS; i++) {
+      this.pins[i] = null;
+      this.pinGhosts[i].root.visible = false;
+    }
+    this.pinSince[0] = this.pinSince[1] = -1;
+  }
+
+  /** Keep live palm `h` where it is: the oldest pin gives way when both slots are full. */
+  private pin(h: number, time: number): void {
+    const palm = this.hands.palms[h];
+    let slot = this.pins.findIndex((p) => p === null);
+    if (slot < 0) slot = this.pins[0]!.at <= this.pins[1]!.at ? 0 : 1;
+    const pin = this.pinStore[slot];
+    pin.center.copy(palm.center);
+    pin.normal.copy(palm.normal);
+    pin.at = time;
+    pin.armed = false;
+    this.pins[slot] = pin;
+    const ghost = this.pinGhosts[slot];
+    ghost.root.visible = true;
+    ghost.material.opacity = PIN_OPACITY;
+    ghost.root.position.copy(pin.center).addScaledVector(pin.normal, -0.012);
+    ghost.root.quaternion.setFromUnitVectors(PALM_DOWN, pin.normal);
+    this.pinSince[h] = -1;
+    playSnap();
   }
 
   /** Make: the puzzle you were making (or an empty board), the palette in the tray, and the maker bar. */
   openMaker(restore: ReadonlyArray<SavedPiece | null> = []): void {
     this.making = true;
+    this.settingsOpen = false;
     this.draft = this.savedDraft() ?? emptyDraft();
     this.loadMaker(restore);
     this.showMakerPanels();
@@ -763,8 +944,9 @@ export class BoardSystem extends createSystem({
 
   /** Swap the bar for the maker bar (or back), with the cells and tray to match. */
   private showMakerPanels(): void {
-    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making;
+    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making && !this.settingsOpen;
     if (this.makerCard?.object3D) this.makerCard.object3D.visible = !this.paused && this.making;
+    if (this.settingsCard?.object3D) this.settingsCard.object3D.visible = !this.paused && this.settingsOpen;
     this.setTrayColumns(this.making ? 2 : 1);
     this.hitsPlaced = this.placeButtonHits();
     this.placeCellTiles();
@@ -880,8 +1062,9 @@ export class BoardSystem extends createSystem({
       }
     }
     if (card) card.visible = this.paused;
-    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making;
+    if (this.controls?.object3D) this.controls.object3D.visible = !this.paused && !this.making && !this.settingsOpen;
     if (this.makerCard?.object3D) this.makerCard.object3D.visible = !this.paused && this.making;
+    if (this.settingsCard?.object3D) this.settingsCard.object3D.visible = !this.paused && this.settingsOpen;
     if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
     for (const hit of this.queries.buttons.entities) {
       const shown = this.buttonShown(hit.getValue(BoardButton, 'action') ?? 0);
@@ -940,6 +1123,9 @@ export class BoardSystem extends createSystem({
     this.candidateLive = level.tray.map(() => false);
     this.pieceSig = new Int32Array(level.tray.length).fill(-2);
     this.palmSig.fill(-2);
+    this.clearPins();
+    this.hintsLeft = HINTS_PER_LEVEL;
+    this.hintLabel?.setProperties({ text: this.hintLabelText() });
     this.pendingSnap = 0;
     this.guardMask = 0;
     this.litMask = this.skyMask = 0;
@@ -1021,7 +1207,7 @@ export class BoardSystem extends createSystem({
     for (const entity of this.queries.held.entities) this.readCandidate(entity);
     if (this.pendingSnap !== 0) this.snapReleased();
 
-    this.updatePalms();
+    this.updatePalms(time);
     this.refresh(time);
     this.animate(delta, time);
 
@@ -1236,22 +1422,67 @@ export class BoardSystem extends createSystem({
     return false;
   }
 
-  /** Real palms become grid cells when they rest in the beam, and discs in the air. */
-  private updatePalms(): void {
-    const n = this.level.size;
+  /**
+   * Real palms become grid cells when they rest in the beam, and discs in the
+   * air. Pinned palms (one-hand mode) fill the slots after the two hands.
+   */
+  private updatePalms(time: number): void {
     for (let h = 0; h < 2; h++) {
       const palm = this.hands.palms[h];
       if (!palm.tracked) {
         this.palmCells[h] = this.palmDiscs[h] = null;
+        this.pinSince[h] = -1;
         continue;
       }
+      this.palmSlot(h, palm.center, palm.normal);
+    }
+    for (let i = 0; i < PIN_SLOTS; i++) {
+      const pin = this.pins[i];
+      if (pin) this.palmSlot(2 + i, pin.center, pin.normal);
+      else this.palmCells[2 + i] = this.palmDiscs[2 + i] = null;
+    }
+    this.updatePins(time);
+  }
+
+  /** One-hand mode: a palm held still in the beam pins; a hand back in a pin's cell unpins it. */
+  private updatePins(time: number): void {
+    if (!this.settings.oneHand) return;
+    for (let i = 0; i < PIN_SLOTS; i++) {
+      const pin = this.pins[i];
+      const cell = this.palmCells[2 + i];
+      if (!pin || !cell) continue;
+      const hand = this.palmCells.findIndex((c, h) => h < 2 && c !== null && c.col === cell.col && c.row === cell.row);
+      if (hand < 0) pin.armed = true;
+      else if (pin.armed) {
+        this.pins[i] = null;
+        this.pinGhosts[i].root.visible = false;
+        this.pinSince[hand] = time;
+      }
+    }
+    for (let h = 0; h < 2; h++) {
+      const cell = this.palmCells[h];
+      // A hand resting on its own pin is done pinning there.
+      const onPin = cell !== null && this.palmCells.some((c, i) => i >= 2 && c !== null && c.col === cell.col && c.row === cell.row);
+      const still = cell !== null && !onPin && this.palmTouch[h] && this.palmSignature(h) === this.palmSig[h];
+      if (!still) {
+        this.pinSince[h] = -1;
+        continue;
+      }
+      if (this.pinSince[h] < 0) this.pinSince[h] = time;
+      else if (time - this.pinSince[h] >= PIN_DWELL) this.pin(h, time);
+    }
+  }
+
+  /** Fill palm slot `h` from a board-local palm pose. */
+  private palmSlot(h: number, center: Vector3, nrm: Vector3): void {
+    const n = this.level.size;
+    {
       const disc = this.palmDiscStore[h];
-      palm.center.toArray(disc.center);
-      palm.normal.toArray(disc.normal);
+      center.toArray(disc.center);
+      nrm.toArray(disc.normal);
       this.palmDiscs[h] = disc;
 
-      const c = palm.center;
-      const nrm = palm.normal;
+      const c = center;
       const col = Math.round(c.x / CELL + (n - 1) / 2);
       const row = Math.round(c.z / CELL + (n - 1) / 2);
       // How far the palm reaches up and down from its center.
@@ -1259,7 +1490,7 @@ export class BoardSystem extends createSystem({
       const inBand = Math.abs(c.y - (BOARD_TOP + BEAM_Y)) <= reach;
       if (!inBand || col < 0 || row < 0 || col >= n || row >= n || this.fixed[col * n + row]) {
         this.palmCells[h] = null;
-        continue;
+        return;
       }
       const cell = this.palmCellStore[h];
       cell.col = col;
@@ -1293,7 +1524,7 @@ export class BoardSystem extends createSystem({
         changed = true;
       }
     }
-    for (let h = 0; h < 2; h++) {
+    for (let h = 0; h < 2 + PIN_SLOTS; h++) {
       const sig = this.palmSignature(h);
       if (sig !== this.palmSig[h]) {
         this.palmSig[h] = sig;
@@ -1366,6 +1597,13 @@ export class BoardSystem extends createSystem({
     if ((touch0 && time - this.lastPalmTouch[0] > GLOW_HOLD) || (touch1 && time - this.lastPalmTouch[1] > GLOW_HOLD)) playPalm();
     this.palmTouch[0] = touch0;
     this.palmTouch[1] = touch1;
+    this.palmsInAnswer = (touch0 ? 1 : 0) + (touch1 ? 1 : 0);
+    for (let i = 0; i < PIN_SLOTS; i++) {
+      if (!this.pins[i]) continue;
+      let hit = grid.palmHits[2 + i] === true;
+      for (let j = 0; j < this.freeCount && !hit; j++) if (this.free[j].palmHits.indexOf(2 + i) >= 0) hit = true;
+      this.pinGhosts[i].material.opacity = hit ? PIN_HIT_OPACITY : PIN_OPACITY;
+    }
     if (touch0) this.lastPalmTouch[0] = time;
     if (touch1) this.lastPalmTouch[1] = time;
     if (touch0 || touch1 || this.queries.held.entities.size > 0) this.coach.progress(time);
@@ -1402,7 +1640,11 @@ export class BoardSystem extends createSystem({
     // A shared puzzle counts toward neither the chapter nor the streak.
     if (this.daily) {
       // Credit the day the puzzle belongs to, even if it is solved after midnight.
-      this.save.daily = recordDailySolve(this.save.daily, this.level.id.slice('daily-'.length));
+      this.save.daily = recordDailySolve(this.save.daily, this.level.id.slice('daily-'.length), {
+        crystals: this.level.crystals.length,
+        pieces: this.placed.filter((m) => m !== null).length,
+        palms: this.palmsInAnswer,
+      });
       this.dailyLabel?.setProperties({ text: this.dailyText() });
     } else if (!this.shared) {
       this.completed.add(this.level.id);
@@ -1429,7 +1671,8 @@ export class BoardSystem extends createSystem({
         mesh.visible = length > 0.0005;
         mesh.position.addVectors(this.a, this.b).multiplyScalar(0.5);
         mesh.quaternion.setFromUnitVectors(this.up, this.tmp);
-        mesh.scale.set(1, Math.max(length, 0.001), 1);
+        const w = this.contrast ? CONTRAST_WIDTH : 1;
+        mesh.scale.set(w, Math.max(length, 0.001), w);
       }
       s++;
     };
@@ -1462,12 +1705,12 @@ export class BoardSystem extends createSystem({
         const lit = (this.litMask & (1 << k)) !== 0;
         crystal.rotation.y += delta * (lit ? 1.8 : 0.35);
         const m = view.crystalMats[k];
-        m.emissiveIntensity += ((lit ? 2.2 : 0.12) - m.emissiveIntensity) * ease;
+        m.emissiveIntensity += ((lit ? (this.contrast ? 3 : 2.2) : this.contrast ? 0.45 : 0.12) - m.emissiveIntensity) * ease;
       });
       view.sky.forEach((crystal, k) => {
         const lit = (this.skyMask & (1 << k)) !== 0;
         crystal.rotation.y += delta * (lit ? 1.8 : 0.5);
-        crystal.position.y += Math.sin(time * 1.4 + k) * 0.00004;
+        crystal.position.y += Math.sin(time * 1.4 + k) * 0.00004 * this.motion;
         const m = view.skyMats[k];
         m.emissiveIntensity += ((lit ? 2.2 : 0.2) - m.emissiveIntensity) * ease;
       });
@@ -1486,7 +1729,7 @@ export class BoardSystem extends createSystem({
       (glow.material as MeshBasicMaterial).opacity = GLOW_OPACITY * level;
       glow.position.copy(palm.center).addScaledVector(palm.normal, 0.012);
       glow.quaternion.setFromUnitVectors(this.zAxis, palm.normal);
-      glow.scale.setScalar(1 + 0.12 * Math.sin(time * 9));
+      glow.scale.setScalar(1 + 0.12 * Math.sin(time * 9) * this.motion);
     }
 
     // Show which piece a pointing hand or the eyes will pick up.
@@ -1503,7 +1746,7 @@ export class BoardSystem extends createSystem({
 
     const since = time - this.solvedAt;
     this.base.rimMat.emissiveIntensity = this.solved
-      ? 0.35 + 1.4 * Math.exp(-since * 2.2) + 0.08 * Math.sin(time * 2)
+      ? 0.35 + 1.4 * Math.exp(-since * 2.2) + 0.08 * Math.sin(time * 2) * this.motion
       : 0.05;
   }
 }

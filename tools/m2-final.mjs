@@ -36,10 +36,13 @@ let before = probe();
 press('next-button');
 let after = probe();
 check('Next by point and pinch', after.level !== before.level, `${before.level} -> ${after.level}`);
-press('hand-button');
+// The tray side switch lives on the settings bar now.
+press('settings-button');
+press('settings-tray');
 after = probe();
 check('Tray side switch', after.traySide === -before.traySide, `side ${before.traySide} -> ${after.traySide}`);
-press('hand-button');
+press('settings-tray');
+press('settings-back');
 
 // 2. Fingertip press on Next: bring the index tip through the panel along its normal.
 before = probe();

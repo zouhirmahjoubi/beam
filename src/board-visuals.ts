@@ -115,6 +115,13 @@ const geo = {
   aperture: new TorusGeometry(0.022, 0.0025, 8, 32),
 };
 
+/** Mark on a colored filter, the shape of the crystal it feeds, so color is never the only cue. */
+const filterMarkGeo: Record<Color, BufferGeometry | null> = {
+  0: null,
+  1: new BoxGeometry(0.007, 0.007, 0.007),
+  2: new TetrahedronGeometry(0.0065, 0),
+};
+
 /** Crystal shape per color, so color is never the only cue. */
 const crystalGeo: Record<Color, BufferGeometry> = {
   0: new OctahedronGeometry(0.017, 0),
@@ -341,6 +348,12 @@ export function buildPiece(kind: PieceKind, color: Color = 0): Group {
     ring.rotation.x = Math.PI / 2;
     ring.position.y = BEAM_Y + 0.016;
     g.add(puck, ring);
+    const markGeo = filterMarkGeo[color];
+    if (markGeo) {
+      const mark = new Mesh(markGeo, mat.lens);
+      mark.position.y = BEAM_Y + 0.022;
+      g.add(mark);
+    }
   } else {
     const face = new Mesh(geo.face, kind === 'mirror' ? mat.mirrorFace : mat.splitterFace);
     face.position.y = BEAM_Y - 0.001;

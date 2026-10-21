@@ -3,16 +3,23 @@ export default async function run({ page, frame }) {
   return (frame ?? page).evaluate(() => {
     const { world, board } = window.__palmlight;
     const entity = world.getSceneEntity('board-controls');
-    const panel = world.getSceneObject('board-controls');
     const names = entity ? entity.getComponents().map((c) => c.id ?? c.name ?? String(c)) : [];
     const r = (v) => Math.round(v * 1000) / 1000;
     const out = { components: names, buttons: {} };
-    for (const id of ['restart-button', 'next-button', 'hand-button']) {
-      const el = panel?.getElementById(id);
-      if (!el) { out.buttons[id] = 'missing'; continue; }
-      el.updateWorldMatrix(true, false);
-      const e = el.matrixWorld.elements;
-      out.buttons[id] = [r(e[12]), r(e[13]), r(e[14])];
+    // Every bar's buttons; hidden bars sit at the bar's place too, so their positions still read.
+    const bars = {
+      'board-controls': ['restart-button', 'next-button', 'hint-button', 'daily-button', 'make-button', 'settings-button'],
+      'settings-panel': ['settings-tray', 'settings-onehand', 'settings-motion', 'settings-contrast', 'settings-back'],
+    };
+    for (const [node, ids] of Object.entries(bars)) {
+      const panel = world.getSceneObject(node);
+      for (const id of ids) {
+        const el = panel?.getElementById(id);
+        if (!el) { out.buttons[id] = 'missing'; continue; }
+        el.updateWorldMatrix(true, false);
+        const e = el.matrixWorld.elements;
+        out.buttons[id] = [r(e[12]), r(e[13]), r(e[14])];
+      }
     }
     out.hits = [...board.queries.buttons.entities].map((h) => { const e = h.object3D.matrixWorld.elements; return [r(e[12]), r(e[13]), r(e[14]), r(h.object3D.scale.x)]; });
     out.hitsPlaced = board.hitsPlaced;

@@ -58,18 +58,18 @@ test('day keys are local calendar days and step back across months and years', (
 test('streaks grow on consecutive days, reset after a gap and count once a day', () => {
   let daily = emptySave('x').daily;
   daily = recordDailySolve(daily, '2026-11-01');
-  assert.deepEqual(daily, { lastSolved: '2026-11-01', streak: 1, best: 1 });
+  assert.deepEqual(daily, { crystals: 0, pieces: 0, palms: 0, lastSolved: '2026-11-01', streak: 1, best: 1 });
   daily = recordDailySolve(daily, '2026-11-01');
   assert.equal(daily.streak, 1);
   daily = recordDailySolve(daily, '2026-11-02');
   daily = recordDailySolve(daily, '2026-11-03');
-  assert.deepEqual(daily, { lastSolved: '2026-11-03', streak: 3, best: 3 });
+  assert.deepEqual(daily, { crystals: 0, pieces: 0, palms: 0, lastSolved: '2026-11-03', streak: 3, best: 3 });
   daily = recordDailySolve(daily, '2026-11-05');
-  assert.deepEqual(daily, { lastSolved: '2026-11-05', streak: 1, best: 3 });
+  assert.deepEqual(daily, { crystals: 0, pieces: 0, palms: 0, lastSolved: '2026-11-05', streak: 1, best: 3 });
 });
 
 test('the shown streak drops to zero once a full day is missed', () => {
-  const daily = { lastSolved: '2026-11-03', streak: 3, best: 3 };
+  const daily = { crystals: 0, pieces: 0, palms: 0, lastSolved: '2026-11-03', streak: 3, best: 3 };
   assert.equal(currentStreak(daily, '2026-11-03'), 3);
   assert.equal(currentStreak(daily, '2026-11-04'), 3);
   assert.equal(currentStreak(daily, '2026-11-05'), 0);
@@ -102,4 +102,16 @@ test('the puzzle being made survives a reload, and a bad one is dropped', () => 
   store.setItem('palmlight.save.v1', JSON.stringify({ ...save, maker: 42 }));
   assert.equal(loadProgress('open-hand', store).maker, null);
   assert.equal(emptySave('open-hand').maker, null);
+});
+
+test('settings save, load, and drop bad values', () => {
+  const store = memory();
+  assert.deepEqual(emptySave('open-hand').settings, { oneHand: false, reducedMotion: null, highContrast: false });
+  const save = { ...emptySave('open-hand'), settings: { oneHand: true, reducedMotion: false, highContrast: true } };
+  saveProgress(save, store);
+  assert.deepEqual(loadProgress('open-hand', store).settings, save.settings);
+  store.setItem('palmlight.save.v1', JSON.stringify({ ...save, settings: { oneHand: 'yes', reducedMotion: 1, highContrast: true } }));
+  assert.deepEqual(loadProgress('open-hand', store).settings, { oneHand: false, reducedMotion: null, highContrast: true });
+  store.setItem('palmlight.save.v1', JSON.stringify({ ...save, settings: null }));
+  assert.deepEqual(loadProgress('open-hand', store).settings, emptySave('open-hand').settings);
 });

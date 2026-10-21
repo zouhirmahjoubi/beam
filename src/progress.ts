@@ -12,10 +12,28 @@ export interface SavedPiece {
 }
 
 export interface DailyStreak {
+  /** How the last daily was solved, for its result card. */
+  crystals: number;
+  pieces: number;
+  palms: number;
   /** Local day key (YYYY-MM-DD) of the last solved daily puzzle. */
   lastSolved: string | null;
   streak: number;
   best: number;
+}
+
+/** Player settings. `reducedMotion` null follows the system preference. */
+export interface Settings {
+  oneHand: boolean;
+  reducedMotion: boolean | null;
+  highContrast: boolean;
+}
+
+/** Player settings. `reducedMotion` null follows the system preference. */
+export interface Settings {
+  oneHand: boolean;
+  reducedMotion: boolean | null;
+  highContrast: boolean;
 }
 
 export interface SaveData {
@@ -32,6 +50,7 @@ export interface SaveData {
   daily: DailyStreak;
   /** Share code of the puzzle being made, so a reload or a new session keeps it. */
   maker: string | null;
+  settings: Settings;
 }
 
 export interface KeyValueStore {
@@ -50,8 +69,26 @@ export function emptySave(firstLevelId: string): SaveData {
     chapterPlaced: [],
     completed: [],
     traySide: 1,
-    daily: { lastSolved: null, streak: 0, best: 0 },
+    daily: { lastSolved: null, streak: 0, best: 0, crystals: 0, pieces: 0, palms: 0 },
     maker: null,
+    settings: { oneHand: false, reducedMotion: null, highContrast: false },
+  };
+}
+
+/** The streak from a save, with its counts as whole numbers or the defaults. */
+function cleanDaily(fresh: DailyStreak, raw: unknown): DailyStreak {
+  const d = { ...fresh, ...((raw ?? {}) as Partial<DailyStreak>) };
+  const whole = (v: unknown, fallback: number) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : fallback);
+  return { ...d, streak: whole(d.streak, 0), best: whole(d.best, 0), crystals: whole(d.crystals, 0), pieces: whole(d.pieces, 0), palms: whole(d.palms, 0) };
+}
+
+/** Settings from a save: booleans only, anything else falls back to the default. */
+function cleanSettings(raw: unknown): Settings {
+  const s = (raw ?? {}) as Partial<Record<keyof Settings, unknown>>;
+  return {
+    oneHand: s.oneHand === true,
+    reducedMotion: typeof s.reducedMotion === 'boolean' ? s.reducedMotion : null,
+    highContrast: s.highContrast === true,
   };
 }
 
@@ -90,9 +127,10 @@ export function loadProgress(firstLevelId: string, store: KeyValueStore | null =
       chapterPlaced: cleanPieces(data.chapterPlaced),
       completed: Array.isArray(data.completed) ? data.completed.filter((id) => typeof id === 'string') : [],
       traySide: data.traySide === -1 ? -1 : 1,
-      daily: { ...fresh.daily, ...data.daily },
+      daily: cleanDaily(fresh.daily, data.daily),
       // Checked again by decodeLevel when the maker opens it.
       maker: typeof data.maker === 'string' ? data.maker : null,
+      settings: cleanSettings(data.settings),
     } as SaveData;
   } catch {
     return fresh;
@@ -120,10 +158,14 @@ export function previousDay(key: string): string {
 }
 
 /** Streak after solving the daily puzzle of `today`. Solving twice in a day counts once. */
-export function recordDailySolve(daily: DailyStreak, today: string): DailyStreak {
+export function recordDailySolve(
+  daily: DailyStreak,
+  today: string,
+  result: { crystals: number; pieces: number; palms: number } = { crystals: 0, pieces: 0, palms: 0 },
+): DailyStreak {
   if (daily.lastSolved === today) return daily;
   const streak = daily.lastSolved === previousDay(today) ? daily.streak + 1 : 1;
-  return { lastSolved: today, streak, best: Math.max(daily.best, streak) };
+  return { ...result, lastSolved: today, streak, best: Math.max(daily.best, streak) };
 }
 
 /** Streak as shown today: it is broken once a whole day was missed. */

@@ -182,6 +182,28 @@
         "scale": 0.1
       },
       "components": {}
+    },
+    {
+      "id": "settings-panel",
+      "name": "Settings Bar",
+      "metadata": {
+        "iwsdk.validation": {
+          "allowFloating": true
+        }
+      },
+      "content": {
+        "type": "asset",
+        "asset": "settings-panel"
+      },
+      "transform": {
+        "position": [
+          0,
+          -10,
+          0
+        ],
+        "scale": 0.1
+      },
+      "components": {}
     }
   ]
 }

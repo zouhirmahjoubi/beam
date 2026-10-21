@@ -44,7 +44,7 @@ interface Demo {
   turn?: number;
 }
 
-interface GhostHand {
+export interface GhostHand {
   root: Group;
   index: Group;
   thumb: Group;
@@ -52,9 +52,11 @@ interface GhostHand {
 }
 
 const UP = new Vector3(0, 1, 0);
-const PALM_DOWN = new Vector3(0, -1, 0);
+export const PALM_DOWN = new Vector3(0, -1, 0);
+/** With reduced motion the demo holds this point of its loop: in place, fully shown. */
+const STILL_T = 0.5;
 
-function buildGhostHand(): GhostHand {
+export function buildGhostHand(): GhostHand {
   const material = new MeshBasicMaterial({
     color: 0xbfeaff,
     transparent: true,
@@ -96,6 +98,8 @@ function buildGhostHand(): GhostHand {
 const ease = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 export class Coach {
+  /** Hold the demo's key pose instead of looping it. */
+  reducedMotion = false;
   private hands: GhostHand[] = [buildGhostHand(), buildGhostHand()];
   /** Built on first use; undefined until then, null when there is no answer. */
   private demo: Demo | null | undefined = undefined;
@@ -133,6 +137,15 @@ export class Coach {
     this.hide();
   }
 
+  /** Play the demo now (a hint), from the board as it is. */
+  play(time: number): void {
+    if (this.demo === undefined || this.demo === null) this.demo = this.level ? this.buildDemo(this.level, this.traySide) : null;
+    if (!this.demo) return;
+    this.playing = true;
+    this.startedAt = time;
+    this.lastProgress = time;
+  }
+
   /** Call when the player makes progress (a move, a palm in the beam). */
   progress(time: number): void {
     this.lastProgress = time;
@@ -159,7 +172,7 @@ export class Coach {
       this.startedAt = time;
     }
     if (!this.playing || !this.demo) return;
-    const t = ((time - this.startedAt) % LOOP) / LOOP;
+    const t = this.reducedMotion ? STILL_T : ((time - this.startedAt) % LOOP) / LOOP;
     if (this.demo.kind === 'palm') this.animatePalms(this.demo, t);
     else this.animatePinch(this.demo, t);
   }

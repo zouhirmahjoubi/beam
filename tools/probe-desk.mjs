@@ -31,9 +31,9 @@ export default async function run({ page, frame }) {
       b.deskSaved = b.onDesk;
       return { onDesk: b.onDesk };
     }
-    // Hits are created in action order; Find my desk is action 5, after the five bar buttons.
-    const hit = [...b.queries.buttons.entities][5]?.object3D;
-    const el = b.buttonEls[5];
+    // Hits are created in action order; Find my desk is action 6, after the six bar buttons.
+    const hit = [...b.queries.buttons.entities][6]?.object3D;
+    const el = b.buttonEls[6];
     return {
       deskShown: b.deskShown,
       cardVisible: b.deskCard?.object3D?.visible ?? null,

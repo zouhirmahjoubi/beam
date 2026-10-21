@@ -10,6 +10,8 @@ const STYLE = `
   background: #fff; color: #14181f; border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
 #share-page h1 { margin: 0 0 6px; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
 #share-page p { margin: 0 0 18px; color: #4a5361; }
+#share-page textarea { width: 100%; box-sizing: border-box; min-height: 96px; padding: 12px; margin: 0 0 12px; border: 1px solid #d5dae1;
+  border-radius: 10px; font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; color: #14181f; background: #f6f8fa; resize: none; }
 #share-page input { width: 100%; box-sizing: border-box; padding: 12px; margin: 0 0 16px; border: 1px solid #d5dae1;
   border-radius: 10px; font: 14px ui-monospace, 'Cascadia Mono', monospace; color: #14181f; background: #f6f8fa; }
 #share-page .row { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -20,7 +22,8 @@ const STYLE = `
 #share-page button:focus-visible { outline: 3px solid #4aa8ff; outline-offset: 2px; }
 `;
 
-export function showSharePage(url: string): void {
+/** `text` is a result card to share along with the link (the daily puzzle). */
+export function showSharePage(url: string, text?: string): void {
   document.getElementById('share-page')?.remove();
   window.history.replaceState(null, '', url);
 
@@ -31,8 +34,9 @@ export function showSharePage(url: string): void {
   page.setAttribute('aria-labelledby', 'share-title');
   page.innerHTML = `<style>${STYLE}</style>
     <div class="card">
-      <h1 id="share-title">Your puzzle is ready</h1>
-      <p>Send this link to a friend with a headset. It opens your puzzle on their desk.</p>
+      <h1 id="share-title">${text ? 'Your daily result' : 'Your puzzle is ready'}</h1>
+      <p>${text ? 'Copy it or share it. It gives nothing away.' : 'Send this link to a friend with a headset. It opens your puzzle on their desk.'}</p>
+      ${text ? '<textarea readonly aria-label="Result card"></textarea>' : ''}
       <input readonly aria-label="Puzzle link" />
       <div class="row">
         <button class="primary" data-act="copy">Copy link</button>
@@ -42,6 +46,10 @@ export function showSharePage(url: string): void {
     </div>`;
   const input = page.querySelector('input')!;
   input.value = url;
+  const card = page.querySelector('textarea');
+  if (card) card.value = text ?? '';
+  // What Copy and Share send: the card (which ends with the link) or the link alone.
+  const payload = text ?? url;
   const copy = page.querySelector<HTMLButtonElement>('[data-act="copy"]')!;
   const share = page.querySelector<HTMLButtonElement>('[data-act="share"]')!;
   share.hidden = typeof navigator.share !== 'function';
@@ -50,15 +58,15 @@ export function showSharePage(url: string): void {
 
   copy.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(payload);
       copy.textContent = 'Copied';
     } catch {
       // No clipboard access: select the link so it can be copied by hand.
-      input.select();
+      (card ?? input).select();
     }
   });
   share.addEventListener('click', () => {
-    navigator.share({ title: 'Palmlight puzzle', url }).catch(() => undefined);
+    navigator.share(text ? { title: 'Palmlight daily', text } : { title: 'Palmlight puzzle', url }).catch(() => undefined);
   });
   page.querySelector('[data-act="close"]')!.addEventListener('click', () => page.remove());
   input.addEventListener('focus', () => input.select());

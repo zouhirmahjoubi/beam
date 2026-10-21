@@ -46,3 +46,6 @@ pids/
 
 # Local agent state
 .adams/
+
+# Emulator check output (screenshots)
+tools/out/
