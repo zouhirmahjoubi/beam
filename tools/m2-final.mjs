@@ -6,7 +6,7 @@
 import { execSync } from 'node:child_process';
 
 const cli = (args, env = {}) =>
-  JSON.parse(execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash' }));
+  JSON.parse(execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash', timeout: 90000 }));
 const json = (o) => `'${JSON.stringify(o)}'`;
 const sleep = (s) => execSync(`sleep ${s}`);
 const probe = () => cli('browser run tools/probe.mjs').data.result;

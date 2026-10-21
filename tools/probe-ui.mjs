@@ -14,7 +14,7 @@ export default async function run({ page, frame }) {
       const e = el.matrixWorld.elements;
       out.buttons[id] = [r(e[12]), r(e[13]), r(e[14])];
     }
-    out.hits = board.buttonHits.map((h) => { const e = h.object3D.matrixWorld.elements; return [r(e[12]), r(e[13]), r(e[14]), r(h.object3D.scale.x)]; });
+    out.hits = [...board.queries.buttons.entities].map((h) => { const e = h.object3D.matrixWorld.elements; return [r(e[12]), r(e[13]), r(e[14]), r(h.object3D.scale.x)]; });
     out.hitsPlaced = board.hitsPlaced;
     return out;
   });

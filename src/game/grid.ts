@@ -248,13 +248,14 @@ export function trace(
       const palmIndex = palmAt.get(k);
       if (palmIndex !== undefined) {
         const palm = palms[palmIndex]!;
-        palmHits[palmIndex] = true;
         points.push({ col, row });
         if (palm.block || dx * palm.nx + dz * palm.nz >= 0) {
+          palmHits[palmIndex] = true;
           beam.end = 'hand';
           break;
         }
         if (palm.lift) {
+          palmHits[palmIndex] = true;
           beam.end = 'lift';
           beam.lift = { col, row, dir, palm: palmIndex, color };
           break;
@@ -263,6 +264,7 @@ export function trace(
         if (out === null) {
           points.pop();
         } else {
+          palmHits[palmIndex] = true;
           dir = out;
           segments++;
         }

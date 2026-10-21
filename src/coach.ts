@@ -15,7 +15,7 @@ import {
   Quaternion,
   Vector3,
 } from '@iwsdk/core';
-import { DIRS, type Level } from './game/grid.js';
+import { DIRS, type Level, type Piece } from './game/grid.js';
 import { apertureVector } from './game/optics.js';
 import { solve, type Solution } from './game/solver.js';
 import { BEAM_Y, BOARD_TOP, cellToLocal, traySlot } from './board-visuals.js';
@@ -101,6 +101,7 @@ export class Coach {
   private demo: Demo | null | undefined = undefined;
   private level: Level | null = null;
   private traySide = 1;
+  private placed: () => ReadonlyArray<Piece | null> = () => [];
   private startedAt = 0;
   private lastProgress = 0;
   private firstTime = false;
@@ -115,7 +116,14 @@ export class Coach {
   }
 
   /** New level on the board. `firstTime` plays the demo early. */
-  setLevel(level: Level, firstTime: boolean, traySide: number, time: number): void {
+  setLevel(
+    level: Level,
+    firstTime: boolean,
+    traySide: number,
+    time: number,
+    placed: () => ReadonlyArray<Piece | null>,
+  ): void {
+    this.placed = placed;
     this.firstTime = firstTime;
     this.startedAt = this.lastProgress = time;
     this.playing = false;
@@ -128,6 +136,8 @@ export class Coach {
   /** Call when the player makes progress (a move, a palm in the beam). */
   progress(time: number): void {
     this.lastProgress = time;
+    // The board changed: the next demo is planned from the new state.
+    if (this.demo) this.demo = undefined;
     if (this.playing) {
       this.playing = false;
       this.hide();
@@ -197,10 +207,15 @@ export class Coach {
       }
       return { kind: 'palm', poses: poses.slice(0, 2) };
     }
-    const piece = solution.pieces[0];
+    // Show a piece of the answer that is not on its cell yet, taken from a
+    // tray slot that still holds a piece of that kind.
+    const placed = this.placed();
+    const done = (p: Piece) => placed.some((m) => m && m.kind === p.kind && m.col === p.col && m.row === p.row);
+    const piece = solution.pieces.find((p) => !done(p));
     if (!piece) return null;
-    const trayIndex = level.tray.findIndex((t) => t.kind === piece.kind && t.color === piece.color);
-    const from = traySlot(n, Math.max(0, trayIndex), new Vector3(), traySide);
+    const trayIndex = level.tray.findIndex((t, i) => t.kind === piece.kind && t.color === piece.color && !placed[i]);
+    if (trayIndex < 0) return null;
+    const from = traySlot(n, trayIndex, new Vector3(), traySide);
     from.y = y + 0.02;
     const to = cellToLocal(n, piece.col, piece.row, new Vector3());
     to.y = y + 0.02;

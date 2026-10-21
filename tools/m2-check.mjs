@@ -5,7 +5,7 @@
 import { execSync } from 'node:child_process';
 
 const cli = (args, env = {}) => {
-  const out = execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash' });
+  const out = execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash', timeout: 90000 });
   return JSON.parse(out);
 };
 const json = (o) => `'${JSON.stringify(o)}'`;

@@ -53,7 +53,7 @@ export default async function run({ page, frame }) {
       skyMask: b.skyMask,
       solved: b.solved,
       beams: b.grid ? b.grid.beams.map((x) => x.end) : [],
-      free: b.free.map((f) => f.end),
+      free: b.free.slice(0, b.freeCount).map((f) => f.end),
       beamSegments: b.base.beamCore.filter((m) => m.visible).length,
     };
   });

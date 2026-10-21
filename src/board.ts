@@ -63,7 +63,8 @@ import {
   type SaveData,
   type SavedPiece,
 } from './progress.js';
-import { apertureVector, freeTrace, reflect3, type FreeResult, type PalmDisc, type SkyTarget, type V3 } from './game/optics.js';
+import { apertureVector, freeBuffer, freeTrace, type FreeResult, type PalmDisc, type SkyTarget, type V3 } from './game/optics.js';
+import { pointInPolygon } from './placement.js';
 import { PALM_RADIUS, PalmReader, palmFacesHead, type HandSource } from './palms.js';
 
 const STEP = Math.PI / 4;
@@ -103,12 +104,20 @@ const FRAME_BUDGET_MS = 13.9;
 const FRAME_SAMPLES = 216;
 /** How far in front of the eyes the pause card floats. */
 const PAUSE_DISTANCE = 0.7;
+/** A lit crystal stays lit this long after the beam leaves it, so jitter cannot flicker it. */
+const LIT_HOLD = 0.15;
+/** A held piece keeps its angle and cell until the hand moves this far past the halfway mark. */
+const SNAP_HYSTERESIS = 0.15;
+/** The eyes are tracked once the head is above this height (the first frames read zero). */
+const MIN_EYE_HEIGHT = 0.3;
 /** The caption floats above the far edge, tilted toward the player. */
 const HINT_TILT = -0.42;
 
 interface NativePlane {
   orientation?: string;
   semanticLabel?: string;
+  /** Outline in the plane's own space (y is 0). */
+  polygon?: ReadonlyArray<{ x: number; z: number }>;
 }
 
 /**
@@ -120,6 +129,7 @@ export class BoardSystem extends createSystem({
   pieces: { required: [BoardPiece] },
   held: { required: [BoardPiece, Grabbed] },
   hovered: { required: [BoardPiece, Hovered], excluded: [Grabbed] },
+  buttons: { required: [BoardButton] },
   buttonsPressed: { required: [BoardButton, Pressed] },
   buttonsHovered: { required: [BoardButton, Hovered] },
   planes: { required: [XRPlane] },
@@ -134,6 +144,8 @@ export class BoardSystem extends createSystem({
   private placed: Array<Piece | null> = [];
   private candidate: Piece[] = [];
   private candidateOk: boolean[] = [];
+  /** The held piece has a candidate from last frame to hold on to. */
+  private candidateLive: boolean[] = [];
   private effective: Array<Piece | null> = [];
   private pieceSig = new Int32Array(0);
   private pendingSnap = 0;
@@ -153,7 +165,16 @@ export class BoardSystem extends createSystem({
   private skyTargets: SkyTarget[] = [];
 
   private grid: TraceResult | null = null;
-  private free: FreeResult[] = [];
+  /** Free-beam results, reused every frame; the first freeCount are current. */
+  private free: FreeResult[] = [freeBuffer(), freeBuffer(), freeBuffer(), freeBuffer()];
+  private freeCount = 0;
+  private freeColor: Color[] = [0, 0, 0, 0];
+  private origin: V3 = [0, 0, 0];
+  private outDir: V3 = [0, 0, 0];
+  /** Time until which each crystal still shows as lit (board crystals, then sky). */
+  private litUntil = new Float32Array(32);
+  private shownLit = 0;
+  private shownSky = 0;
   private litMask = 0;
   private skyMask = 0;
   private palmTouch = [false, false];
@@ -195,14 +216,14 @@ export class BoardSystem extends createSystem({
   private pauseCard: Entity | undefined;
   private handLabel: { setProperties(p: { text: string }): void } | undefined;
   private tilt = new Quaternion();
-  private buttonHits: Entity[] = [];
   private buttonEls: Array<{ getWorldPosition(v: Vector3): Vector3 } | undefined> = [];
   private hitsPlaced = false;
   private c = new Vector3();
   private xAxis = new Vector3(1, 0, 0);
 
   private placeUntil = 0;
-  private nextPlaceAt = 0;
+  private seated = false;
+  private planeArrived = false;
   private placeRequested = true;
   private touched = false;
   private immersive = false;
@@ -228,6 +249,7 @@ export class BoardSystem extends createSystem({
 
     this.queries.held.subscribe('qualify', (entity) => {
       this.touched = true;
+      this.candidateLive[this.indexOf(entity)] = false;
       this.guardPalmPinch(entity);
     });
     this.queries.held.subscribe('disqualify', (entity) => {
@@ -235,7 +257,7 @@ export class BoardSystem extends createSystem({
     });
     this.queries.planes.subscribe('qualify', () => {
       // A desk found late in the window still gets used.
-      this.nextPlaceAt = 0;
+      this.planeArrived = true;
     });
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((state) => {
@@ -326,13 +348,12 @@ export class BoardSystem extends createSystem({
     // Each button gets its own hit area entity in world space. They are
     // placed once the panel has been laid out (see placeButtonHits).
     this.buttonEls = BUTTON_IDS.map((id) => panel.getElementById(id) ?? undefined);
-    this.buttonHits = BUTTON_IDS.map((_, action) => {
+    BUTTON_IDS.forEach((_, action) => {
       const hit = new Mesh(BUTTON_HIT_GEOMETRY, BUTTON_HIT_MATERIAL.clone());
       const entity = this.world.createTransformEntity(hit);
       entity.addComponent(BoardButton, { action });
       entity.addComponent(RayInteractable);
       entity.addComponent(PokeInteractable);
-      return entity;
     });
 
     const setOpacity = (entity: Entity, opacity: number) => {
@@ -361,7 +382,7 @@ export class BoardSystem extends createSystem({
    */
   private placeButtonHits(): boolean {
     const panel = this.controls?.object3D;
-    if (!panel || this.buttonHits.length === 0 || this.buttonEls.some((el) => !el)) return false;
+    if (!panel || this.queries.buttons.entities.size === 0 || this.buttonEls.some((el) => !el)) return false;
     panel.updateWorldMatrix(true, true);
     const first = this.buttonEls[0]!.getWorldPosition(this.a).clone();
     const last = this.buttonEls[this.buttonEls.length - 1]!.getWorldPosition(this.b);
@@ -370,14 +391,15 @@ export class BoardSystem extends createSystem({
     const pitch = span / (this.buttonEls.length - 1);
     panel.getWorldQuaternion(this.q);
     this.c.set(0, 0, 1).applyQuaternion(this.q);
-    this.buttonHits.forEach((entity, i) => {
+    for (const entity of this.queries.buttons.entities) {
       const hit = entity.object3D;
-      if (!hit) return;
-      this.buttonEls[i]!.getWorldPosition(this.tmp).addScaledVector(this.c, 0.004);
+      const el = this.buttonEls[entity.getValue(BoardButton, 'action') ?? 0];
+      if (!hit || !el) continue;
+      el.getWorldPosition(this.tmp).addScaledVector(this.c, 0.004);
       setWorldPosition(hit, this.tmp);
       setWorldQuaternion(hit, this.q);
       hit.scale.set(pitch * 0.92, 0.046, 0.01);
-    });
+    }
     return true;
   }
 
@@ -535,7 +557,7 @@ export class BoardSystem extends createSystem({
     if (card) card.visible = this.paused;
     if (this.controls?.object3D) this.controls.object3D.visible = !this.paused;
     if (this.fpsCard?.object3D) this.fpsCard.object3D.visible = this.fpsOn && !this.paused;
-    for (const hit of this.buttonHits) if (hit.object3D) hit.object3D.visible = !this.paused;
+    for (const hit of this.queries.buttons.entities) if (hit.object3D) hit.object3D.visible = !this.paused;
     this.showHint();
   }
 
@@ -554,7 +576,11 @@ export class BoardSystem extends createSystem({
       entity.object3D?.removeFromParent();
       entity.destroy();
     }
-    if (this.content) this.base.root.remove(this.content.group);
+    if (this.content) {
+      this.base.root.remove(this.content.group);
+      for (const m of this.content.crystalMats) m.dispose();
+      for (const m of this.content.skyMats) m.dispose();
+    }
     this.content = buildLevel(level);
     this.base.root.add(this.content.group);
 
@@ -577,6 +603,7 @@ export class BoardSystem extends createSystem({
     this.effective = level.tray.map(() => null);
     this.candidate = level.tray.map((t) => ({ kind: t.kind, col: 0, row: 0, angle: 0, color: t.color }));
     this.candidateOk = level.tray.map(() => false);
+    this.candidateLive = level.tray.map(() => false);
     this.pieceSig = new Int32Array(level.tray.length).fill(-2);
     this.palmSig.fill(-2);
     this.pendingSnap = 0;
@@ -585,7 +612,9 @@ export class BoardSystem extends createSystem({
     this.solved = false;
     this.solvedSince = this.nextLevelAt = -1;
     this.grid = null;
-    this.free = [];
+    this.freeCount = 0;
+    this.litUntil.fill(0);
+    this.shownLit = this.shownSky = 0;
 
     level.tray.forEach((t, i) => {
       const piece = this.world.createTransformEntity(buildPiece(t.kind, t.color));
@@ -613,7 +642,7 @@ export class BoardSystem extends createSystem({
     }
     this.seatPieces();
 
-    this.coach.setLevel(level, !this.daily && !this.completed.has(level.id), this.traySide, this.now);
+    this.coach.setLevel(level, !this.daily && !this.completed.has(level.id), this.traySide, this.now, () => this.placed);
     this.showHint();
     const current = this.daily ? -1 : this.levelIndex;
     this.base.dots.forEach((dot, i) => {
@@ -629,14 +658,18 @@ export class BoardSystem extends createSystem({
     if (this.placeRequested) {
       this.placeRequested = false;
       this.placeUntil = time + PLACEMENT_WINDOW;
-      this.nextPlaceAt = 0;
+      this.seated = false;
       this.touched = false;
       this.desk.reset();
       this.deskRestored = this.deskSaved = false;
     }
-    if (time < this.placeUntil && !this.touched && time >= this.nextPlaceAt) {
-      this.seatBoard();
-      this.nextPlaceAt = time + 0.5;
+    // Seat once when the eyes track, and again only if a desk shows up later
+    // in the window, so the board does not follow the player's gaze around.
+    if (time < this.placeUntil && !this.touched && (!this.seated || this.planeArrived)) {
+      if (this.seatBoard()) {
+        this.seated = true;
+        this.planeArrived = false;
+      }
     }
     if (this.immersive) this.rememberDesk(time);
 
@@ -662,11 +695,15 @@ export class BoardSystem extends createSystem({
     return entity.getValue(BoardPiece, 'index') ?? 0;
   }
 
-  /** Seat the board on the nearest desk-height surface, or in front of the player. */
-  private seatBoard(): void {
+  /**
+   * Seat the board on a desk-height surface right in front of the player, or
+   * on a stand there. Returns false while the eyes are not tracked yet.
+   */
+  private seatBoard(): boolean {
     const eye: Object3D = this.immersive ? this.player.head : this.world.camera;
     eye.updateWorldMatrix(true, false);
     eye.getWorldPosition(this.head);
+    if (this.immersive && this.head.y < MIN_EYE_HEIGHT) return false;
     eye.getWorldQuaternion(this.q);
     this.fwd.set(0, 0, -1).applyQuaternion(this.q);
     this.fwd.y = 0;
@@ -683,6 +720,13 @@ export class BoardSystem extends createSystem({
       if (below < 0.2 || below > 0.75) continue;
       const dist = Math.hypot(this.tmp.x - this.head.x, this.tmp.z - this.head.z);
       if (dist > 1.5) continue;
+      // The board's spot in front of the player must be on this surface,
+      // not beside it, or the board would float at desk height.
+      if (plane.polygon && plane.polygon.length >= 3) {
+        this.c.set(this.head.x + this.fwd.x * REACH, this.tmp.y, this.head.z + this.fwd.z * REACH);
+        entity.object3D.worldToLocal(this.c);
+        if (!pointInPolygon(this.c.x, this.c.z, plane.polygon)) continue;
+      }
       const score = dist - (plane.semanticLabel === 'table' ? 0.5 : 0);
       if (score < best) {
         best = score;
@@ -707,6 +751,7 @@ export class BoardSystem extends createSystem({
     }
     this.seatPieces();
     this.seatControls();
+    return true;
   }
 
   /**
@@ -781,16 +826,24 @@ export class BoardSystem extends createSystem({
 
     object.getWorldPosition(this.tmp);
     root.worldToLocal(this.tmp);
-    const col = Math.round(this.tmp.x / CELL + (n - 1) / 2);
-    const row = Math.round(this.tmp.z / CELL + (n - 1) / 2);
+    const fx = this.tmp.x / CELL + (n - 1) / 2;
+    const fz = this.tmp.z / CELL + (n - 1) / 2;
     const nearBoard = this.tmp.y > -0.03 && this.tmp.y < 0.15;
 
     object.getWorldQuaternion(this.q);
     this.a.set(1, 0, 0).applyQuaternion(this.q);
-    const yaw = Math.atan2(-this.a.z, this.a.x) - root.rotation.y;
-    const angle = ((Math.round(yaw / STEP) % 8) + 8) % 8;
+    const steps = (Math.atan2(-this.a.z, this.a.x) - root.rotation.y) / STEP;
 
+    // Keep the current cell and angle until the hand is clearly past the
+    // halfway mark, so tracking noise cannot make the preview jump.
     const c = this.candidate[i];
+    const live = this.candidateLive[i];
+    const keep = 0.5 + SNAP_HYSTERESIS;
+    const col = live && Math.abs(fx - c.col) < keep ? c.col : Math.round(fx);
+    const row = live && Math.abs(fz - c.row) < keep ? c.row : Math.round(fz);
+    const turn = ((((steps - c.angle) % 8) + 12) % 8) - 4;
+    const angle = live && Math.abs(turn) < keep ? c.angle : ((Math.round(steps) % 8) + 8) % 8;
+    this.candidateLive[i] = true;
     if (this.candidateOk[i] && angle !== c.angle && c.kind !== 'filter') playTurn();
     c.col = col;
     c.row = row;
@@ -914,37 +967,66 @@ export class BoardSystem extends createSystem({
     const grid = this.grid!;
 
     // Light in the air follows the palms every frame.
-    const lifted = grid.beams.some((b) => b.lift);
-    if (lifted || changed || this.free.length > 0) {
-      this.free = [];
-      for (const beam of grid.beams) {
+    let lifted = false;
+    for (let j = 0; j < grid.beams.length; j++) if (grid.beams[j].lift) lifted = true;
+    if (lifted || changed || this.freeCount > 0) {
+      this.freeCount = 0;
+      for (let j = 0; j < grid.beams.length && this.freeCount < this.free.length; j++) {
+        const beam = grid.beams[j];
         const lift = beam.lift;
         const disc = lift ? this.palmDiscs[lift.palm] : null;
         if (!lift || !disc) continue;
         cellToLocal(n, lift.col, lift.row, this.a);
         const [dx, dz] = DIRS[lift.dir];
         const l = Math.hypot(dx, dz);
-        const out = reflect3([dx / l, 0, dz / l], disc.normal);
-        this.free.push(freeTrace([this.a.x, BOARD_TOP + BEAM_Y, this.a.z], out, lift.color, this.palmDiscs, this.skyTargets, lift.palm));
+        // Reflect the incoming flat beam about the palm normal.
+        const nrm = disc.normal;
+        const k = 2 * ((dx / l) * nrm[0] + (dz / l) * nrm[2]);
+        this.outDir[0] = dx / l - k * nrm[0];
+        this.outDir[1] = -k * nrm[1];
+        this.outDir[2] = dz / l - k * nrm[2];
+        this.origin[0] = this.a.x;
+        this.origin[1] = BOARD_TOP + BEAM_Y;
+        this.origin[2] = this.a.z;
+        freeTrace(this.origin, this.outDir, lift.color, this.palmDiscs, this.skyTargets, lift.palm, 0.9, 3, this.free[this.freeCount]);
+        this.freeColor[this.freeCount] = lift.color;
+        this.freeCount++;
       }
       this.drawBeams(grid);
     }
 
+    // Raw hits drive solving; the shown state holds briefly so jitter at a
+    // cell or band edge cannot flicker a crystal or repeat its note.
     let lit = 0;
     for (const k of grid.lit) lit |= 1 << k;
     let sky = 0;
-    for (const f of this.free) if (f.hit >= 0) sky |= 1 << f.hit;
+    for (let j = 0; j < this.freeCount; j++) if (this.free[j].hit >= 0) sky |= 1 << this.free[j].hit;
+    const crystals = this.level.crystals.length;
+    let shownLit = 0;
+    let shownSky = 0;
     let step = 0;
-    for (let k = 0; k < this.level.crystals.length; k++) {
-      if (lit & (1 << k) && !(this.litMask & (1 << k))) playLit(step++);
+    for (let k = 0; k < crystals; k++) {
+      if (lit & (1 << k)) this.litUntil[k] = time + LIT_HOLD;
+      if (this.litUntil[k] > time) shownLit |= 1 << k;
     }
     for (let k = 0; k < this.skyTargets.length; k++) {
-      if (sky & (1 << k) && !(this.skyMask & (1 << k))) playLit(step++);
+      if (sky & (1 << k)) this.litUntil[crystals + k] = time + LIT_HOLD;
+      if (this.litUntil[crystals + k] > time) shownSky |= 1 << k;
     }
+    for (let k = 0; k < crystals; k++) if (shownLit & (1 << k) && !(this.shownLit & (1 << k))) playLit(step++);
+    for (let k = 0; k < this.skyTargets.length; k++) if (shownSky & (1 << k) && !(this.shownSky & (1 << k))) playLit(step++);
+    this.shownLit = shownLit;
+    this.shownSky = shownSky;
 
-    const touch0 = grid.palmHits[0] || this.free.some((f) => f.palmHits.includes(0));
-    const touch1 = grid.palmHits[1] || this.free.some((f) => f.palmHits.includes(1));
-    if ((touch0 && !this.palmTouch[0]) || (touch1 && !this.palmTouch[1])) playPalm();
+    let touch0 = grid.palmHits[0] === true;
+    let touch1 = grid.palmHits[1] === true;
+    for (let j = 0; j < this.freeCount; j++) {
+      const hits = this.free[j].palmHits;
+      if (hits.indexOf(0) >= 0) touch0 = true;
+      if (hits.indexOf(1) >= 0) touch1 = true;
+    }
+    // Chime only when a palm meets the beam after a real gap, not on every flicker.
+    if ((touch0 && time - this.lastPalmTouch[0] > GLOW_HOLD) || (touch1 && time - this.lastPalmTouch[1] > GLOW_HOLD)) playPalm();
     this.palmTouch[0] = touch0;
     this.palmTouch[1] = touch1;
     if (touch0) this.lastPalmTouch[0] = time;
@@ -952,8 +1034,8 @@ export class BoardSystem extends createSystem({
     if (touch0 || touch1 || this.queries.held.entities.size > 0) this.coach.progress(time);
 
     if (!this.solved) {
-      this.litMask = lit;
-      this.skyMask = sky;
+      this.litMask = shownLit;
+      this.skyMask = shownSky;
       const allSky = this.skyTargets.length === 0 || sky === (1 << this.skyTargets.length) - 1;
       if (grid.solved && allSky) {
         if (this.solvedSince < 0) this.solvedSince = time;
@@ -1010,14 +1092,14 @@ export class BoardSystem extends createSystem({
         draw(beam.color);
       }
     }
-    this.free.forEach((f, j) => {
-      const color = grid.beams.filter((b) => b.lift)[j]?.color ?? 0;
-      for (let i = 0; i + 1 < f.points.length; i++) {
+    for (let j = 0; j < this.freeCount; j++) {
+      const f = this.free[j];
+      for (let i = 0; i + 1 < f.count; i++) {
         this.a.fromArray(f.points[i]);
         this.b.fromArray(f.points[i + 1]);
-        draw(color);
+        draw(this.freeColor[j]);
       }
-    });
+    }
     for (; s < beamCore.length; s++) beamCore[s].visible = beamGlow[s].visible = false;
   }
 

@@ -104,6 +104,16 @@ test('a palm facing the beam reflects it like a mirror', () => {
   assert.equal(r.palmHits[0], true);
 });
 
+test('a palm the beam runs past edge-on does not count as hit', () => {
+  // Palm turned almost edge-on (its line snaps to the beam's direction), so the
+  // light slips past. Exactly side-on counts as the hand's edge and blocks.
+  const l = Math.hypot(0.3, 0.95);
+  const edgeOn: PalmCell = { col: 2, row: 4, nx: -0.3 / l, nz: -0.95 / l, lift: false };
+  const r = trace(open, [], [edgeOn]);
+  assert.equal(r.palmHits[0], false);
+  assert.equal(r.beams[0].end, 'edge');
+});
+
 test('the back of the hand blocks the beam', () => {
   const back: PalmCell = { col: 2, row: 4, nx: Math.SQRT1_2, nz: Math.SQRT1_2, lift: false };
   const r = trace(open, [mirror(2, 1, 1)], [back]);

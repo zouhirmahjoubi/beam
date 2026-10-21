@@ -2,7 +2,7 @@
 // Dev-only: checks M3 in the emulator. Usage: node tools/m3-check.mjs
 import { execSync } from 'node:child_process';
 const cli = (args, env = {}) =>
-  JSON.parse(execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash' }));
+  JSON.parse(execSync(`npx @iwsdk/cli ${args}`, { encoding: 'utf8', env: { ...process.env, ...env }, shell: 'bash', timeout: 90000 }));
 const json = (o) => `'${JSON.stringify(o)}'`;
 const sleep = (s) => execSync(`sleep ${s}`);
 const m3 = (mode = 'state') => cli('browser run tools/probe-m3.mjs', { MODE: mode }).data.result;
@@ -24,7 +24,12 @@ reload();
 let s = m3();
 check('Fresh start on Open Hand with its caption', s.level === 'open-hand' && s.hintVisible === true, s);
 sleep(3);
-s = m3();
+// The ghost fades out for part of each loop, so sample a few times.
+for (let tries = 0; tries < 4; tries++) {
+  s = m3();
+  if (s.ghostVisible[0]) break;
+  sleep(0.7);
+}
 check('Ghost hand shows the palm move', s.coachPlaying && s.ghostVisible[0] && s.demo === 'palm', s);
 
 // Save and resume: a mirror placed on First Light survives a reload.
