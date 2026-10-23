@@ -2,8 +2,10 @@ import {
   AdditiveBlending,
   BoxGeometry,
   BufferGeometry,
+  CanvasTexture,
   CircleGeometry,
   CylinderGeometry,
+  DoubleSide,
   Float32BufferAttribute,
   Group,
   LineBasicMaterial,
@@ -49,10 +51,13 @@ const glowMat = (color: number, opacity: number) =>
     depthWrite: false,
   });
 
+/** Rim glow while a level is unsolved. */
+export const RIM_IDLE = 0.14;
+
 const mat = {
   base: new MeshStandardMaterial({ color: 0x0b0f16, roughness: 0.35, metalness: 0.2 }),
-  rim: new MeshStandardMaterial({ color: 0x111722, emissive: 0x7fd8ff, emissiveIntensity: 0.05, roughness: 0.4 }),
-  grid: new LineBasicMaterial({ color: 0x2b3a4d, transparent: true, opacity: 0.8 }),
+  rim: new MeshStandardMaterial({ color: 0x111722, emissive: 0x7fd8ff, emissiveIntensity: RIM_IDLE, roughness: 0.4 }),
+  grid: new LineBasicMaterial({ color: 0x3a4c63, transparent: true, opacity: 0.9 }),
   blocker: new MeshStandardMaterial({ color: 0x2a2f38, roughness: 0.8, metalness: 0.05 }),
   dark: new MeshStandardMaterial({ color: 0x1a202b, roughness: 0.3, metalness: 0.6 }),
   lens: new MeshBasicMaterial({ color: 0xf2fbff }),
@@ -69,6 +74,8 @@ const mat = {
   dotOff: new MeshBasicMaterial({ color: 0x24303f }),
   dotOn: new MeshBasicMaterial({ color: 0x7fd8ff }),
   palmGlow: glowMat(0xffffff, 0.55),
+  // Seen from behind and from the side as the emitter turns, so both faces draw.
+  lensGlow: Object.assign(glowMat(0x7fd8ff, 0.7), { side: DoubleSide }),
   hover: glowMat(0x7fd8ff, 0.75),
 };
 
@@ -105,13 +112,15 @@ const geo = {
   pieceBase: new CylinderGeometry(0.022, 0.024, 0.007, 24),
   knob: new CylinderGeometry(0.006, 0.006, 0.012, 12),
   filterDisc: new CylinderGeometry(0.016, 0.016, 0.03, 32),
-  beamCore: new CylinderGeometry(0.0018, 0.0018, 1, 6, 1, true),
-  beamGlow: new CylinderGeometry(0.0065, 0.0065, 1, 10, 1, true),
+  beamCore: new CylinderGeometry(0.0024, 0.0024, 1, 6, 1, true),
+  beamGlow: new CylinderGeometry(0.0085, 0.0085, 1, 10, 1, true),
   ghost: new PlaneGeometry(CELL * 0.9, CELL * 0.9),
   stand: new CylinderGeometry(0.025, 0.06, 1, 24),
   trayPad: new BoxGeometry(0.075, 0.006, TRAY_SLOTS * 0.075),
   dot: new SphereGeometry(0.004, 12, 8),
   palmGlow: new CircleGeometry(0.03, 24),
+  lensGlow: new CircleGeometry(0.011, 16),
+  shadow: new PlaneGeometry(1, 1),
   aperture: new TorusGeometry(0.022, 0.0025, 8, 32),
 };
 
@@ -135,6 +144,8 @@ export interface BaseView {
   beamGlow: Mesh[];
   ghost: Mesh;
   stand: Mesh;
+  /** Contact shadow under the board: only on a real desk, never in mid-air. */
+  shadow: Mesh | null;
   rimMat: MeshStandardMaterial;
   palmGlows: Mesh[];
   dots: Mesh[];
@@ -166,11 +177,44 @@ export function traySlot(size: number, i: number, out: Vector3, side = 1): Vecto
 }
 
 /** The persistent board: base, rims, grid, tray, beam pool and feedback. */
+/** A soft dark disc, drawn once, for the contact shadow under the board. */
+function shadowTexture(): CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  if (!g) return null;
+  const grad = g.createRadialGradient(size / 2, size / 2, size * 0.18, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0.5)');
+  grad.addColorStop(0.55, 'rgba(0, 0, 0, 0.22)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return new CanvasTexture(canvas);
+}
+
 export function buildBase(levelCount: number): BaseView {
   const n = BOARD_SIZE;
   const width = n * CELL;
   const root = new Group();
   root.name = 'palmlight-board';
+
+  // Contact shadow: grounds the board on the real desk in passthrough. Wide
+  // enough to sit under the tray on either side.
+  const shadowMap = shadowTexture();
+  let shadow: Mesh | null = null;
+  if (shadowMap) {
+    shadow = new Mesh(
+      geo.shadow,
+      new MeshBasicMaterial({ map: shadowMap, transparent: true, depthWrite: false, opacity: 1 }),
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = 0.0006;
+    shadow.scale.set(width + 0.34, width + 0.14, 1);
+    shadow.renderOrder = -1;
+    root.add(shadow);
+  }
 
   const base = new Mesh(new BoxGeometry(width, BOARD_TOP, width), mat.base);
   base.position.y = BOARD_TOP / 2;
@@ -253,7 +297,7 @@ export function buildBase(levelCount: number): BaseView {
   stand.visible = false;
   root.add(stand);
 
-  return { root, beamCore, beamGlow, ghost, stand, rimMat, palmGlows, dots, hoverRing, trayPad: pad };
+  return { root, beamCore, beamGlow, ghost, stand, shadow, rimMat, palmGlows, dots, hoverRing, trayPad: pad };
 }
 
 function crystalMaterial(color: Color): MeshStandardMaterial {
@@ -288,7 +332,12 @@ export function buildLevel(level: Level): LevelView {
   const lens = new Mesh(geo.lens, mat.lens);
   lens.rotation.z = Math.PI / 2;
   lens.position.set(0.024, BEAM_Y, 0);
-  emitter.add(body, lens);
+  // A soft glow on the lens, so the light source reads as lit.
+  const lensGlow = new Mesh(geo.lensGlow, mat.lensGlow);
+  lensGlow.rotation.y = Math.PI / 2;
+  lensGlow.position.set(0.031, BEAM_Y, 0);
+  lensGlow.renderOrder = 2;
+  emitter.add(body, lens, lensGlow);
   cellToLocal(n, level.emitter.col, level.emitter.row, emitter.position);
   emitter.rotation.y = (level.emitter.dir * Math.PI) / 4;
   group.add(emitter);

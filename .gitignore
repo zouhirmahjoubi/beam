@@ -49,3 +49,4 @@ pids/
 
 # Emulator check output (screenshots)
 tools/out/
+dist-analyze/

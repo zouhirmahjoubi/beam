@@ -23,7 +23,7 @@ import {
   type UIKitMLAsset,
   type Object3D,
 } from '@iwsdk/core';
-import { playLit, playPalm, playSnap, playSolved, playTurn } from './audio.js';
+import { playLit, playPalm, playSnap, playSolved, playTurn, setListener } from './audio.js';
 import { showSharePage } from './share-page.js';
 import { BoardButton, BoardCell, BoardPiece } from './beam-components.js';
 import {
@@ -37,6 +37,7 @@ import {
   CELL,
   cellToLocal,
   dotMaterials,
+  RIM_IDLE,
   traySlot,
   type BaseView,
   type LevelView,
@@ -220,6 +221,11 @@ export class BoardSystem extends createSystem({
   private settingsCard: Entity | undefined;
   private settingsOpen = false;
   private settingsLabelEls: Record<string, { setProperties(p: { text: string }): void } | undefined> = {};
+  /** Listener pose and sound spots, reused every frame. */
+  private ear = new Vector3();
+  private earForward = new Vector3();
+  private earUp = new Vector3();
+  private soundAt = new Vector3();
   /** 1 normally, 0 with reduced motion: scales every decorative pulse. */
   private motion = 1;
   private contrast = false;
@@ -764,6 +770,21 @@ export class BoardSystem extends createSystem({
     }
   }
 
+  /** Sounds play from their spot on the desk, so the listener rides on the head. */
+  private updateListener(): void {
+    const eye: Object3D = this.immersive ? this.player.head : this.world.camera;
+    eye.getWorldPosition(this.ear);
+    eye.getWorldQuaternion(this.q);
+    this.earForward.set(0, 0, -1).applyQuaternion(this.q);
+    this.earUp.set(0, 1, 0).applyQuaternion(this.q);
+    setListener(this.ear, this.earForward, this.earUp);
+  }
+
+  /** World position of a board-local point, for a placed sound. */
+  private spot(local: { x: number; y: number; z: number }): Vector3 {
+    return this.base.root.localToWorld(this.soundAt.set(local.x, local.y, local.z));
+  }
+
   /** Which hit areas can be pressed: the bar or the maker bar, and Find my desk when offered. */
   private buttonShown(action: number): boolean {
     if (action < BUTTON_IDS.length) return !this.making && !this.settingsOpen;
@@ -853,7 +874,7 @@ export class BoardSystem extends createSystem({
     ghost.root.position.copy(pin.center).addScaledVector(pin.normal, -0.012);
     ghost.root.quaternion.setFromUnitVectors(PALM_DOWN, pin.normal);
     this.pinSince[h] = -1;
-    playSnap();
+    playSnap(this.spot(pin.center));
   }
 
   /** Make: the puzzle you were making (or an empty board), the palette in the tray, and the maker bar. */
@@ -1174,6 +1195,7 @@ export class BoardSystem extends createSystem({
 
   update(delta: number, time: number): void {
     this.now = time;
+    this.updateListener();
     this.updateFrameTime(delta);
     if (this.placeRequested) {
       this.placeRequested = false;
@@ -1265,6 +1287,7 @@ export class BoardSystem extends createSystem({
 
     const stand = this.base.stand;
     stand.visible = !this.onDesk && height > 0.1;
+    if (this.base.shadow) this.base.shadow.visible = this.onDesk;
     stand.scale.set(1, Math.max(height, 0.01), 1);
     stand.position.set(0, -height / 2, 0);
 
@@ -1299,6 +1322,7 @@ export class BoardSystem extends createSystem({
       root.updateMatrixWorld(true);
       this.onDesk = true;
       this.base.stand.visible = false;
+      if (this.base.shadow) this.base.shadow.visible = true;
       this.seatPieces();
       this.seatControls();
       this.deskRestored = this.deskSaved = true;
@@ -1367,7 +1391,7 @@ export class BoardSystem extends createSystem({
     const turn = ((((steps - c.angle) % 8) + 12) % 8) - 4;
     const angle = live && Math.abs(turn) < keep ? c.angle : ((Math.round(steps) % 8) + 8) % 8;
     this.candidateLive[i] = true;
-    if (this.candidateOk[i] && angle !== c.angle && c.kind !== 'filter') playTurn();
+    if (this.candidateOk[i] && angle !== c.angle && c.kind !== 'filter') playTurn(this.spot(cellToLocal(this.level.size, col, row, this.soundAt)));
     c.col = col;
     c.row = row;
     c.angle = c.kind === 'filter' ? 0 : angle;
@@ -1392,7 +1416,7 @@ export class BoardSystem extends createSystem({
         const c = this.candidate[i];
         this.placed[i] = { kind: c.kind, col: c.col, row: c.row, angle: c.angle, color: c.color };
         this.coach.progress(this.now);
-        playSnap();
+        playSnap(this.spot(cellToLocal(this.level.size, c.col, c.row, this.soundAt)));
       } else {
         this.placed[i] = null;
       }
@@ -1581,8 +1605,18 @@ export class BoardSystem extends createSystem({
       if (sky & (1 << k)) this.litUntil[crystals + k] = time + LIT_HOLD;
       if (this.litUntil[crystals + k] > time) shownSky |= 1 << k;
     }
-    for (let k = 0; k < crystals; k++) if (shownLit & (1 << k) && !(this.shownLit & (1 << k))) playLit(step++);
-    for (let k = 0; k < this.skyTargets.length; k++) if (shownSky & (1 << k) && !(this.shownSky & (1 << k))) playLit(step++);
+    for (let k = 0; k < crystals; k++) {
+      if (shownLit & (1 << k) && !(this.shownLit & (1 << k))) {
+        const c = this.level.crystals[k];
+        playLit(step++, this.spot(cellToLocal(n, c.col, c.row, this.soundAt)));
+      }
+    }
+    for (let k = 0; k < this.skyTargets.length; k++) {
+      if (shownSky & (1 << k) && !(this.shownSky & (1 << k))) {
+        const [x, y, z] = this.skyTargets[k].center;
+        playLit(step++, this.spot(this.soundAt.set(x, y, z)));
+      }
+    }
     this.shownLit = shownLit;
     this.shownSky = shownSky;
 
@@ -1594,7 +1628,9 @@ export class BoardSystem extends createSystem({
       if (hits.indexOf(1) >= 0) touch1 = true;
     }
     // Chime only when a palm meets the beam after a real gap, not on every flicker.
-    if ((touch0 && time - this.lastPalmTouch[0] > GLOW_HOLD) || (touch1 && time - this.lastPalmTouch[1] > GLOW_HOLD)) playPalm();
+    const chimeLeft = touch0 && time - this.lastPalmTouch[0] > GLOW_HOLD;
+    const chimeRight = touch1 && time - this.lastPalmTouch[1] > GLOW_HOLD;
+    if (chimeLeft || chimeRight) playPalm(this.spot((chimeLeft ? this.hands.palms[0] : this.hands.palms[1]).center));
     this.palmTouch[0] = touch0;
     this.palmTouch[1] = touch1;
     this.palmsInAnswer = (touch0 ? 1 : 0) + (touch1 ? 1 : 0);
@@ -1621,7 +1657,7 @@ export class BoardSystem extends createSystem({
         if (ready !== this.makerSolved) {
           this.makerSolved = ready;
           this.makerNote = null;
-          if (ready) playSolved();
+          if (ready) playSolved(this.spot(this.soundAt.set(0, BOARD_TOP, 0)));
           this.showHint();
         }
       } else if (grid.solved && allSky) {
@@ -1652,7 +1688,7 @@ export class BoardSystem extends createSystem({
     }
     this.persist();
     this.showHint();
-    playSolved();
+    playSolved(this.spot(this.soundAt.set(0, BOARD_TOP, 0)));
   }
 
   private drawBeams(grid: TraceResult): void {
@@ -1705,7 +1741,7 @@ export class BoardSystem extends createSystem({
         const lit = (this.litMask & (1 << k)) !== 0;
         crystal.rotation.y += delta * (lit ? 1.8 : 0.35);
         const m = view.crystalMats[k];
-        m.emissiveIntensity += ((lit ? (this.contrast ? 3 : 2.2) : this.contrast ? 0.45 : 0.12) - m.emissiveIntensity) * ease;
+        m.emissiveIntensity += ((lit ? (this.contrast ? 3 : 2.2) : this.contrast ? 0.6 : 0.3) - m.emissiveIntensity) * ease;
       });
       view.sky.forEach((crystal, k) => {
         const lit = (this.skyMask & (1 << k)) !== 0;
@@ -1747,6 +1783,6 @@ export class BoardSystem extends createSystem({
     const since = time - this.solvedAt;
     this.base.rimMat.emissiveIntensity = this.solved
       ? 0.35 + 1.4 * Math.exp(-since * 2.2) + 0.08 * Math.sin(time * 2) * this.motion
-      : 0.05;
+      : RIM_IDLE;
   }
 }

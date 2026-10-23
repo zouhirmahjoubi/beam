@@ -3,7 +3,7 @@
 export default async function run({ page, frame }) {
   const mode = process.env.MODE ?? 'state';
   return (frame ?? page).evaluate(
-    ({ mode, cell }) => {
+    ({ mode, cell, hold }) => {
       const p = window.__palmlight;
       if (!p) return { error: 'window.__palmlight missing' };
       const b = p.board;
@@ -24,6 +24,8 @@ export default async function run({ page, frame }) {
         b.seatPieces();
         // Real piece moves save; do the same.
         b.persist();
+        // HOLD keeps the solved board on show instead of moving on to the next level.
+        if (hold) setTimeout(() => (b.nextLevelAt = -1), 900);
         return { pieces: s.pieces.length };
       }
       if (mode === 'close-page') {
@@ -53,6 +55,6 @@ export default async function run({ page, frame }) {
         search: window.location.search,
       };
     },
-    { mode, cell: Number(process.env.CELL ?? 0) },
+    { mode, cell: Number(process.env.CELL ?? 0), hold: process.env.HOLD === '1' },
   );
 }

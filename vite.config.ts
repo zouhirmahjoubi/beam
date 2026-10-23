@@ -6,7 +6,15 @@
  */
 
 import { iwsdkDev } from '@iwsdk/vite-plugin-dev';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+
+// Production builds get only the icons the panels use: the UI kit imports the
+// whole Lucide set as a namespace, which no tree-shaking can trim (4 MB raw).
+const production = process.env.NODE_ENV === 'production';
+const iconSubset = fileURLToPath(new URL('./src/icons.ts', import.meta.url));
+// Likewise three's rect area light tables (240 KB) for a light type the game never uses.
+const rectAreaStub = fileURLToPath(new URL('./src/stubs/rect-area-light-uniforms.ts', import.meta.url));
 
 export default defineConfig({
   plugins: [iwsdkDev()],
@@ -22,6 +30,12 @@ export default defineConfig({
   // (three@0.185 vs app super-three@0.181). Duplicate Component classes break
   // instanceof checks → "Only pmndrs/uikit components can be added as children".
   resolve: {
+    alias: production
+      ? [
+          { find: /^@pmndrs\/uikit-lucide$/, replacement: iconSubset },
+          { find: /^three\/examples\/jsm\/lights\/RectAreaLightUniformsLib\.js$/, replacement: rectAreaStub },
+        ]
+      : [],
     dedupe: [
       'three',
       '@pmndrs/uikit',
